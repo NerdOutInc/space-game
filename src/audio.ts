@@ -5,10 +5,12 @@
  * unlock() succeeds; requested music starts as soon as its buffer arrives.
  */
 
+const audioPath = (file: string): string => `${import.meta.env.BASE_URL}audio/${file}`;
+
 const TRACKS: Record<string, string> = {
-  engine: '/audio/rocket-engine.mp3',
-  dunes: '/audio/dunes.mp3',
-  cosmic: '/audio/cosmic-glow.mp3',
+  engine: audioPath('rocket-engine.mp3'),
+  dunes: audioPath('dunes.mp3'),
+  cosmic: audioPath('cosmic-glow.mp3'),
 };
 
 const FADE = 1.2; // s, music crossfade
