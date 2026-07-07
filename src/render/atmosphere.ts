@@ -22,6 +22,9 @@ export function makeAtmosphereMaterial(
       uShellR: { value: shellR },
       uScaleH: { value: scaleH },
       uIntensity: { value: intensity },
+      // sunlight direction in VIEW space — update per frame via
+      // updateAtmosphereSun(); defaults to "toward camera" (fully lit)
+      uSunDir: { value: new THREE.Vector3(0, 0, 1) },
     },
     vertexShader: `
       #include <common>
@@ -44,17 +47,22 @@ export function makeAtmosphereMaterial(
       uniform float uShellR;
       uniform float uScaleH;
       uniform float uIntensity;
+      uniform vec3 uSunDir;
       varying vec3 vNormal;
       varying vec3 vView;
       void main() {
         #include <logdepthbuf_fragment>
-        float c = abs(dot(normalize(vNormal), normalize(vView)));
+        vec3 n = normalize(vNormal);
+        float c = abs(dot(n, normalize(vView)));
         // closest approach of this view ray to the planet center
         float b = uShellR * sqrt(max(1.0 - c * c, 0.0));
         float depth = exp(-max(b - uPlanetR, 0.0) / uScaleH);
         // subtle veil over the disc, full strength only near the limb
         float limb = smoothstep(uPlanetR * 0.55, uPlanetR, b);
-        gl_FragColor = vec4(uColor, depth * uIntensity * mix(0.22, 1.0, limb));
+        // atmospheres scatter SUNLIGHT: dark past the terminator, with a
+        // soft twilight band
+        float sun = clamp(dot(n, uSunDir) * 1.5 + 0.35, 0.02, 1.0);
+        gl_FragColor = vec4(uColor, depth * uIntensity * mix(0.22, 1.0, limb) * sun);
       }
     `,
     transparent: true,
@@ -63,14 +71,41 @@ export function makeAtmosphereMaterial(
   });
 }
 
-/** Attach a soft atmosphere shell as a child of a planet mesh (flight view). */
-export function addAtmosphereShell(planetMesh: THREE.Mesh, body: Body): void {
-  if (!body.atmosphere) return;
+const _sunView = new THREE.Vector3();
+
+/**
+ * Point an atmosphere material's sunlight at the star. `sunDirWorld` is the
+ * direction FROM the planet TOWARD the sun; it's converted into the given
+ * camera's view space (call after the camera matrices are up to date).
+ */
+export function updateAtmosphereSun(
+  mat: THREE.ShaderMaterial,
+  sunDirWorld: THREE.Vector3,
+  camera: THREE.Camera,
+): void {
+  _sunView.copy(sunDirWorld).transformDirection(camera.matrixWorldInverse);
+  (mat.uniforms.uSunDir.value as THREE.Vector3).copy(_sunView);
+}
+
+/**
+ * Attach a soft atmosphere shell as a child of a planet mesh (flight view).
+ * Returns the material so the scene can keep its sunlight direction fresh.
+ */
+export function addAtmosphereShell(
+  planetMesh: THREE.Mesh,
+  body: Body,
+): THREE.ShaderMaterial | null {
+  if (!body.atmosphere) return null;
   const a = body.atmosphere;
   const shellR = body.radius + a.height * 4;
-  const shell = new THREE.Mesh(
-    new THREE.SphereGeometry(shellR, 96, 48),
-    makeAtmosphereMaterial(a.skyColor.clone(), body.radius, shellR, a.height * 1.3, 0.75),
+  const mat = makeAtmosphereMaterial(
+    a.skyColor.clone(),
+    body.radius,
+    shellR,
+    a.height * 1.3,
+    0.75,
   );
+  const shell = new THREE.Mesh(new THREE.SphereGeometry(shellR, 96, 48), mat);
   planetMesh.add(shell);
+  return mat;
 }

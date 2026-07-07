@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { AUDIO } from '../audio';
 import { GameHost, GameScene } from '../host';
-import { makeAtmosphereMaterial } from '../render/atmosphere';
+import { makeAtmosphereMaterial, updateAtmosphereSun } from '../render/atmosphere';
 import { makeBodyTexture, makeStarfield } from '../render/textures';
 import { STATE } from '../state';
 import { GAIA, LUNA } from '../universe/bodies';
@@ -15,6 +15,7 @@ export class MenuScene implements GameScene {
   private camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
   private gaia: THREE.Mesh;
   private luna: THREE.Mesh;
+  private shellMat!: THREE.ShaderMaterial;
   private t = 0;
   private bound = false;
 
@@ -43,17 +44,16 @@ export class MenuScene implements GameScene {
     // Menu planet is unit-scale; keep the atmosphere hugging the surface.
     const a = GAIA.atmosphere!;
     const shellScale = 1 + (a.height * 2) / GAIA.radius;
-    const shell = new THREE.Mesh(
-      new THREE.SphereGeometry(shellScale, 96, 48),
-      makeAtmosphereMaterial(
-        a.skyColor.clone(),
-        1,
-        shellScale,
-        (a.height * 0.8) / GAIA.radius,
-        0.85,
-      ),
+    const shellMat = makeAtmosphereMaterial(
+      a.skyColor.clone(),
+      1,
+      shellScale,
+      (a.height * 0.8) / GAIA.radius,
+      0.85,
     );
+    const shell = new THREE.Mesh(new THREE.SphereGeometry(shellScale, 96, 48), shellMat);
     this.gaia.add(shell);
+    this.shellMat = shellMat;
     // water surface over the seabed texture
     const water = new THREE.Mesh(
       new THREE.SphereGeometry(1.001, 96, 48),
@@ -83,6 +83,13 @@ export class MenuScene implements GameScene {
 
     this.camera.position.set(0, 0, 3.4);
     this.camera.lookAt(0.6, 0, 0);
+    // match the shell's sunlight to the menu's key light
+    this.camera.updateMatrixWorld();
+    updateAtmosphereSun(
+      this.shellMat,
+      new THREE.Vector3(-4, 1.5, 3).normalize(),
+      this.camera,
+    );
     this.onResize();
   }
 

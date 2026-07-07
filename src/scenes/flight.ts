@@ -2,7 +2,11 @@ import * as THREE from 'three';
 import { AUDIO } from '../audio';
 import { GameHost, GameScene } from '../host';
 import { orbitalElements, sampleOrbit } from '../math/kepler';
-import { addAtmosphereShell } from '../render/atmosphere';
+import {
+  addAtmosphereShell,
+  makeAtmosphereMaterial,
+  updateAtmosphereSun,
+} from '../render/atmosphere';
 import { Navball } from '../render/navball';
 import { buildFlame, buildRocketVisual } from '../render/rocketMesh';
 import { makeBodyTexture, makeDotTexture, makeStarfield } from '../render/textures';
@@ -13,7 +17,6 @@ import { displacePlanetGeometry, groundHeight, PAD_DIR } from '../universe/terra
 import { $, fmtDist, fmtSpeed, fmtTime } from '../util/format';
 import { showToast } from '../util/toast';
 import { BoosterInstance, Vessel } from '../vessel/vessel';
-import { makeAtmosphereMaterial } from '../render/atmosphere';
 
 const MAP_SCALE = 1e-6; // meters → map units
 
@@ -58,6 +61,9 @@ export class FlightScene implements GameScene {
   private camPitch = 0.18;
   private camDist = 26;
   private bodyMeshes = new Map<Body, THREE.Mesh>();
+  /** Atmosphere shell materials that need per-frame sun direction updates. */
+  private atmoMats: Array<{ body: Body; mat: THREE.ShaderMaterial }> = [];
+  private mapAtmoMats: Array<{ body: Body; mat: THREE.ShaderMaterial }> = [];
   private stars: THREE.Points;
   private sunLight: THREE.DirectionalLight;
   private rocketHolder = new THREE.Group();
@@ -150,7 +156,8 @@ export class FlightScene implements GameScene {
           );
           mesh.add(water);
         }
-        addAtmosphereShell(mesh, body);
+        const atmoMat = addAtmosphereShell(mesh, body);
+        if (atmoMat) this.atmoMats.push({ body, mat: atmoMat });
       }
       this.bodyMeshes.set(body, mesh);
       this.scene.add(mesh);
@@ -186,17 +193,16 @@ export class FlightScene implements GameScene {
         // Soft haze fading from the surface outward (same shader as flight view)
         const planetR = body.radius * MAP_SCALE;
         const shellR = (body.radius + body.atmosphere.height * 4) * MAP_SCALE;
-        const haze = new THREE.Mesh(
-          new THREE.SphereGeometry(shellR, 48, 24),
-          makeAtmosphereMaterial(
-            body.atmosphere.skyColor.clone(),
-            planetR,
-            shellR,
-            body.atmosphere.height * 1.3 * MAP_SCALE,
-            0.85,
-          ),
+        const hazeMat = makeAtmosphereMaterial(
+          body.atmosphere.skyColor.clone(),
+          planetR,
+          shellR,
+          body.atmosphere.height * 1.3 * MAP_SCALE,
+          0.85,
         );
+        const haze = new THREE.Mesh(new THREE.SphereGeometry(shellR, 48, 24), hazeMat);
         mesh.add(haze);
+        this.mapAtmoMats.push({ body, mat: hazeMat });
         // Faint ring at the exact edge of drag, for flight planning
         const atmoR = (body.radius + body.atmosphere.height) * MAP_SCALE;
         const ringPts: THREE.Vector3[] = [];
@@ -1017,6 +1023,14 @@ export class FlightScene implements GameScene {
     this.camera.position.copy(camDir.multiplyScalar(this.camDist));
     this.camera.up.copy(up);
     this.camera.lookAt(0, 0, 0);
+
+    // Atmospheres scatter sunlight — keep their sun direction current so
+    // the night side goes dark (no more planets glowing from across space)
+    this.camera.updateMatrixWorld();
+    for (const { body, mat } of this.atmoMats) {
+      body.worldPosition(t, _v3).multiplyScalar(-1).normalize(); // toward Helios
+      updateAtmosphereSun(mat, _v3, this.camera);
+    }
   }
 
   // ---------------- map-view sync ----------------
@@ -1051,6 +1065,12 @@ export class FlightScene implements GameScene {
         vis.orbit.position.copy(_v3);
       }
       this.placeLabel(vis.label, vis.mesh.position);
+    }
+
+    // Map atmospheres get the same sunlight treatment
+    for (const { body, mat } of this.mapAtmoMats) {
+      body.worldPosition(t, _v2).multiplyScalar(-1).normalize();
+      updateAtmosphereSun(mat, _v2, this.mapCamera);
     }
 
     // Vessel marker + orbit
