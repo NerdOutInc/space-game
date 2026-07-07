@@ -3,7 +3,10 @@ import './style.css';
 import { GameHost, GameScene } from './host';
 import { FlightScene } from './scenes/flight';
 import { VABScene } from './scenes/vab';
+import { STATE } from './state';
+import { HOME } from './universe/bodies';
 import { PartDef } from './vessel/parts';
+import { Vessel } from './vessel/vessel';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 
@@ -53,18 +56,61 @@ class Game implements GameHost {
     this.switchTo(this.vab);
   }
 
-  toFlight(defs: PartDef[]): void {
-    this.switchTo(new FlightScene(this, defs));
+  launchVessel(defs: PartDef[]): void {
+    const vessel = new Vessel(defs, HOME);
+    vessel.name = STATE.nextName();
+    STATE.add(vessel);
+    this.switchTo(new FlightScene(this, vessel));
+  }
+
+  flyVessel(vessel: Vessel): void {
+    this.switchTo(new FlightScene(this, vessel));
+  }
+
+  revertVessel(vessel: Vessel): void {
+    const fresh = new Vessel(vessel.defs, HOME);
+    fresh.name = vessel.name;
+    STATE.replace(vessel, fresh);
+    this.switchTo(new FlightScene(this, fresh));
+  }
+
+  recoverVessel(vessel: Vessel): void {
+    STATE.remove(vessel);
+    this.toVAB();
+  }
+
+  removeVessel(vessel: Vessel): void {
+    STATE.remove(vessel);
+    this.toVAB();
   }
 
   start(): void {
     this.toVAB();
-    const loop = () => {
-      requestAnimationFrame(loop);
-      const dt = Math.min(this.clock.getDelta(), 0.05);
+    let lastStep = performance.now();
+    const step = () => {
+      lastStep = performance.now();
+      // Cover real elapsed time (up to 2 s) — scenes chunk physics internally,
+      // so a throttled background tab still simulates at full speed.
+      const dt = Math.min(this.clock.getDelta(), 2);
       this.scene?.update(dt);
     };
+    const loop = () => {
+      requestAnimationFrame(loop);
+      step();
+    };
     loop();
+    // Browsers throttle rAF to zero in hidden/occluded windows; keep the
+    // simulation ticking (at reduced rate) from a timer so flights continue.
+    setInterval(() => {
+      if (performance.now() - lastStep > 90) step();
+    }, 30);
+    if (import.meta.env.DEV) {
+      // Test hook: synchronously advance the game by `sec` seconds.
+      (window as unknown as { __step?: (sec: number) => void }).__step = (sec) => {
+        const n = Math.ceil(sec / 0.05);
+        for (let i = 0; i < n; i++) this.scene?.update(0.05);
+      };
+    }
   }
 }
 

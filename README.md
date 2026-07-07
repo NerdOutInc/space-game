@@ -40,12 +40,36 @@ npm run dev      # opens on http://localhost:5173
 | `Shift` / `Ctrl` | Throttle up / down (`Z` full, `X` cut) |
 | `W`/`S`, `A`/`D`, `Q`/`E` | Pitch, yaw, roll |
 | `T` | Toggle SAS (rotation damping) |
+| `G` | Toggle the ascent autopilot (flies to a ~100 km orbit) |
 | `,` / `.` | Time warp down / up |
 | `M` | Toggle map view |
 | `P` | Deploy parachute |
 | `R` | Revert to launch |
-| `Esc` | Back to the VAB |
+| `Esc` | Pause menu (resume · revert · recover · back to VAB · terminate) |
 | Mouse drag / scroll | Camera |
+
+### Navball
+
+The ball at the bottom-center shows your attitude relative to the local
+horizon: blue is sky, brown is ground, letters are compass headings
+(launch east — `HDG 090°`). The yellow wings are your nose; ○ is prograde,
+⊗ is retrograde. HDG/PIT readouts sit above the ball.
+
+### Multiple flights
+
+Leaving a flight (Esc → *Return to VAB*) keeps the vessel on rails: it
+coasts, crosses SOIs, and stays exactly where physics says while you build
+the next rocket. The **Mission Control** panel in the VAB lists every
+active flight — click *FLY* to jump back aboard. Landed vessels on Gaia can
+be *recovered* from the pause menu.
+
+### Autopilot
+
+Press `G` on the pad and the ship flies itself to orbit: ignition, an
+east-facing gravity turn, staging on flameout, a warped coast to apoapsis
+and a circularization burn (~160 × 95 km with the sample rocket). Watch the
+navball while it flies — that profile is exactly what you should imitate
+by hand.
 
 ## The Helios system
 

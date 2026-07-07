@@ -24,6 +24,10 @@
         <div id="stack-list"></div>
         <div id="vab-stats"></div>
       </div>
+      <div id="missions-panel" class="panel hidden">
+        <h3>Mission Control <span class="hint">active flights</span></h3>
+        <div id="missions-list"></div>
+      </div>
       <button id="launch-btn" class="btn launch">▲ &nbsp;LAUNCH</button>
       <div class="vab-help panel">
         Click a part to add it to the <b>bottom</b> of the stack; click a stacked part to remove
@@ -54,6 +58,7 @@
         </div>
         <div class="row">
           <span id="sas-ind" class="ind on">SAS</span>
+          <span id="ap-ind" class="ind">AUTO</span>
           <span id="stage-ind" class="ind">STAGE 1</span>
           <span id="tilt-ind" class="ind">TILT 0°</span>
         </div>
@@ -64,22 +69,44 @@
           <button class="btn" id="btn-map">MAP&nbsp;M</button>
           <button class="btn" id="btn-warp-down">◀&nbsp;WARP</button>
           <button class="btn" id="btn-warp-up">WARP&nbsp;▶</button>
+          <button class="btn" id="btn-ap">AUTO&nbsp;⏵&nbsp;100&nbsp;KM</button>
         </div>
         <div class="keys">
           <b>Shift/Ctrl</b> throttle · <b>Z/X</b> full/cut · <b>Space</b> ignite/stage<br />
           <b>W/S</b> pitch · <b>A/D</b> yaw · <b>Q/E</b> roll · <b>T</b> SAS<br />
-          <b>, / .</b> time warp · <b>M</b> map · <b>P</b> parachute<br />
-          <b>R</b> revert to launch · <b>Esc</b> back to VAB · drag/scroll: camera
+          <b>, / .</b> time warp · <b>M</b> map · <b>P</b> parachute · <b>G</b> autopilot<br />
+          <b>R</b> revert to launch · <b>Esc</b> pause · drag/scroll: camera
         </div>
       </div>
       <div id="map-info" class="panel hidden"></div>
       <div id="map-labels"></div>
+      <div id="navball-ui">
+        <div id="nb-readout">
+          <span id="nb-hdg">HDG —</span><span id="nb-pit">PIT 90°</span>
+        </div>
+        <div id="nb-ring"><div id="nb-cross"></div></div>
+      </div>
       <div id="end-dialog" class="panel hidden">
         <h2 id="end-title">Vessel destroyed</h2>
         <p id="end-msg"></p>
         <div class="btn-row">
           <button class="btn" id="end-revert">Revert to launch</button>
           <button class="btn" id="end-vab">Back to VAB</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ PAUSE (shared) ============ -->
+    <div id="pause-menu" class="hidden">
+      <div class="panel pause-box">
+        <h2>PAUSED</h2>
+        <p id="pause-ut">UT 0:00</p>
+        <div class="pause-buttons">
+          <button class="btn" id="pause-resume">Resume</button>
+          <button class="btn" id="pause-revert">Revert to launch</button>
+          <button class="btn" id="pause-recover">Recover vessel</button>
+          <button class="btn" id="pause-tovab">Return to VAB (flight continues)</button>
+          <button class="btn danger" id="pause-terminate">Terminate flight</button>
         </div>
       </div>
     </div>

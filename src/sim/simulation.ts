@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { propagateKepler } from '../math/kepler';
-import { Vessel } from '../vessel/vessel';
+import { GameState } from '../state';
+import { PartInstance, Vessel } from '../vessel/vessel';
+import { Autopilot } from './autopilot';
 
 export interface Controls {
   pitch: number; // -1..1
@@ -26,13 +28,25 @@ const _mat = new THREE.Matrix4();
 const _dq = new THREE.Quaternion();
 
 export class Simulation {
-  t = 0; // universal time, s
   warp = 1;
   vessel: Vessel;
+  autopilot = new Autopilot();
+  /** Parts dropped by autopilot staging, for the scene to turn into debris. */
+  dropped: PartInstance[][] = [];
+  private state: GameState;
 
-  constructor(vessel: Vessel) {
+  constructor(vessel: Vessel, state: GameState) {
     this.vessel = vessel;
-    this.syncLanded();
+    this.state = state;
+    if (vessel.landed) this.syncLanded();
+  }
+
+  /** Universal time lives on the shared game state. */
+  get t(): number {
+    return this.state.t;
+  }
+  set t(v: number) {
+    this.state.t = v;
   }
 
   requestWarp(dir: 1 | -1): string | null {
@@ -57,12 +71,14 @@ export class Simulation {
   step(frameDt: number, ctrl: Controls): string[] {
     const msgs: string[] = [];
     const v = this.vessel;
-    const dt = frameDt * this.warp;
 
     if (v.destroyed) {
       this.t += frameDt;
       return msgs;
     }
+
+    if (this.autopilot.active) msgs.push(...this.autopilot.update(this));
+    const dt = frameDt * this.warp;
 
     if (v.landed) {
       this.t += dt;
@@ -107,7 +123,11 @@ export class Simulation {
     const r = v.pos.length();
     const alt = r - b.radius;
 
-    this.applyAttitude(h, ctrl);
+    if (this.autopilot.active && this.autopilot.desiredDir) {
+      this.steerToward(h, this.autopilot.desiredDir);
+    } else {
+      this.applyAttitude(h, ctrl);
+    }
 
     // Gravity
     _acc.copy(v.pos).multiplyScalar(-b.mu / (r * r * r));
@@ -147,6 +167,22 @@ export class Simulation {
     v.pos.addScaledVector(v.vel, h);
 
     this.checkGround(msgs);
+  }
+
+  /** Autopilot steering: rotate the stack's +Y toward `target` at a fixed rate. */
+  private steerToward(h: number, target: THREE.Vector3): void {
+    const v = this.vessel;
+    _t1.set(0, 1, 0).applyQuaternion(v.q);
+    const angle = _t1.angleTo(target);
+    if (angle > 1e-4) {
+      const step = Math.min(angle, 0.45 * h);
+      _t2.crossVectors(_t1, target);
+      if (_t2.lengthSq() < 1e-12) _t2.set(1, 0, 0);
+      else _t2.normalize();
+      _dq.setFromAxisAngle(_t2, step);
+      v.q.premultiply(_dq).normalize();
+    }
+    v.angVel.set(0, 0, 0);
   }
 
   private applyAttitude(h: number, ctrl: Controls): void {

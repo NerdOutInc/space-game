@@ -414,6 +414,146 @@ body {
   color: var(--accent);
 }
 
+/* ============ NAVBALL ============ */
+
+#navball-ui {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 170px;
+  pointer-events: none;
+}
+#nb-readout {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--accent);
+  text-shadow: 0 0 6px #000;
+  margin-bottom: 4px;
+  padding: 0 6px;
+}
+#nb-ring {
+  position: relative;
+  width: 170px;
+  height: 170px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-dim);
+  box-shadow:
+    inset 0 -22px 34px rgba(0, 0, 0, 0.55),
+    inset 0 10px 22px rgba(255, 255, 255, 0.08),
+    0 0 20px rgba(0, 0, 0, 0.5);
+  box-sizing: content-box;
+  margin-left: -2px;
+}
+#nb-cross {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  border: 2.5px solid #ffd257;
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.8);
+}
+#nb-cross::before,
+#nb-cross::after {
+  content: '';
+  position: absolute;
+  background: #ffd257;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.8);
+}
+#nb-cross::before {
+  left: -24px;
+  top: 50%;
+  width: 60px;
+  height: 2.5px;
+  transform: translateY(-50%);
+}
+#nb-cross::after {
+  left: 50%;
+  top: -10px;
+  width: 2.5px;
+  height: 8px;
+  transform: translateX(-50%);
+}
+
+/* ============ MISSION CONTROL ============ */
+
+#missions-panel {
+  position: absolute;
+  right: 18px;
+  bottom: 26px;
+  width: 260px;
+  max-height: 34%;
+  overflow-y: auto;
+}
+#missions-panel.hidden {
+  display: none;
+}
+.mission-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  font-size: 12px;
+}
+.mission-row small {
+  display: block;
+  color: #8a97a5;
+  font-size: 10px;
+  margin-top: 2px;
+}
+.mission-row .lost {
+  color: var(--bad);
+}
+
+/* ============ PAUSE MENU ============ */
+
+#pause-menu {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 4, 8, 0.6);
+  backdrop-filter: blur(3px);
+  z-index: 50;
+}
+#pause-menu.hidden {
+  display: none;
+}
+.pause-box {
+  width: 340px;
+  text-align: center;
+  padding: 26px;
+}
+.pause-box h2 {
+  font-size: 18px;
+  letter-spacing: 0.4em;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.pause-box p {
+  font-size: 11px;
+  color: #8a97a5;
+  margin-bottom: 18px;
+}
+.pause-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pause-buttons .btn {
+  padding: 10px;
+}
+
 #end-dialog {
   position: absolute;
   top: 50%;

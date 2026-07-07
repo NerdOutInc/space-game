@@ -23,6 +23,10 @@ interface EngineFiring {
 export class Vessel {
   parts: PartInstance[]; // ordered top → bottom
 
+  name = 'Untitled Craft';
+  /** The original build, kept for "revert to launch". */
+  readonly defs: PartDef[];
+
   body: Body;
   /** Position/velocity relative to `body` center, non-rotating frame. */
   pos = new THREE.Vector3();
@@ -41,6 +45,7 @@ export class Vessel {
   private hadThrust = false;
 
   constructor(defs: PartDef[], body: Body = HOME) {
+    this.defs = [...defs];
     this.parts = defs.map((def) => ({
       def,
       fuel: def.fuel ?? 0,

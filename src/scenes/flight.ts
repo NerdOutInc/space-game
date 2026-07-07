@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import { GameHost, GameScene } from '../host';
 import { orbitalElements, sampleOrbit } from '../math/kepler';
+import { Navball } from '../render/navball';
 import { buildFlame, buildRocketVisual } from '../render/rocketMesh';
 import { makeBodyTexture, makeDotTexture, makeStarfield } from '../render/textures';
 import { Controls, Simulation } from '../sim/simulation';
+import { STATE } from '../state';
 import { BODIES, Body, HOME } from '../universe/bodies';
 import { $, fmtDist, fmtSpeed, fmtTime } from '../util/format';
-import { PartDef } from '../vessel/parts';
 import { Vessel } from '../vessel/vessel';
 
 const MAP_SCALE = 1e-6; // meters → map units
@@ -32,11 +33,18 @@ interface MapBodyVis {
   label: HTMLElement;
 }
 
+interface OtherVesselVis {
+  vessel: Vessel;
+  marker: THREE.Sprite;
+  label: HTMLElement;
+}
+
 export class FlightScene implements GameScene {
   private host: GameHost;
-  private defs: PartDef[];
   private vessel: Vessel;
   private sim: Simulation;
+  private navball = new Navball();
+  private paused = false;
 
   // -- flight view --
   private scene = new THREE.Scene();
@@ -62,6 +70,7 @@ export class FlightScene implements GameScene {
   private mapBodies = new Map<Body, MapBodyVis>();
   private vesselMarker: THREE.Sprite;
   private vesselLabel: HTMLElement;
+  private others: OtherVesselVis[] = [];
   private orbitLine: THREE.Line;
   private orbitGeo: THREE.BufferGeometry;
   private apMarker: THREE.Sprite;
@@ -83,11 +92,10 @@ export class FlightScene implements GameScene {
   private lastX = 0;
   private lastY = 0;
 
-  constructor(host: GameHost, defs: PartDef[]) {
+  constructor(host: GameHost, vessel: Vessel) {
     this.host = host;
-    this.defs = defs;
-    this.vessel = new Vessel(defs, HOME);
-    this.sim = new Simulation(this.vessel);
+    this.vessel = vessel;
+    this.sim = new Simulation(vessel, STATE);
 
     // ---------- flight scene ----------
     this.scene.background = new THREE.Color(0x000004);
@@ -177,8 +185,23 @@ export class FlightScene implements GameScene {
     this.mapScene.add(this.vesselMarker);
     this.vesselLabel = document.createElement('div');
     this.vesselLabel.className = 'map-label marker-label';
-    this.vesselLabel.textContent = '● vessel';
+    this.vesselLabel.textContent = `● ${vessel.name}`;
     labels.appendChild(this.vesselLabel);
+
+    // Other vessels in the world show up as gray markers in the map.
+    for (const other of STATE.vessels) {
+      if (other === vessel) continue;
+      const marker = new THREE.Sprite(
+        new THREE.SpriteMaterial({ map: dot, color: 0xb9c4cf, depthTest: false }),
+      );
+      marker.visible = false;
+      this.mapScene.add(marker);
+      const label = document.createElement('div');
+      label.className = 'map-label';
+      label.textContent = other.name;
+      labels.appendChild(label);
+      this.others.push({ vessel: other, marker, label });
+    }
 
     this.orbitGeo = new THREE.BufferGeometry();
     this.orbitGeo.setAttribute(
@@ -226,11 +249,16 @@ export class FlightScene implements GameScene {
     $('btn-map').onclick = () => this.toggleMap();
     $('btn-warp-up').onclick = () => this.warp(1);
     $('btn-warp-down').onclick = () => this.warp(-1);
-    $('end-revert').onclick = () => this.host.toFlight(this.defs);
-    $('end-vab').onclick = () => this.host.toVAB();
+    $('btn-ap').onclick = () => this.toggleAutopilot();
+    $('end-revert').onclick = () => this.host.revertVessel(this.vessel);
+    $('end-vab').onclick = () => this.host.removeVessel(this.vessel);
     $('map-labels').style.display = 'none';
     $('map-info').classList.add('hidden');
-    this.toast(`T-minus... press SPACE to ignite. Godspeed!`);
+    if (this.vessel.launchedAt === null) {
+      this.toast(`${this.vessel.name} on the pad — SPACE to ignite, or G for autopilot`);
+    } else {
+      this.toast(`Now flying ${this.vessel.name}`);
+    }
   }
 
   exit(): void {
@@ -241,6 +269,8 @@ export class FlightScene implements GameScene {
     window.removeEventListener('pointerup', this.onPointerUp);
     canvas.removeEventListener('wheel', this.onWheel);
     $('map-labels').innerHTML = '';
+    $('pause-menu').classList.add('hidden');
+    this.navball.dispose();
     // This scene is per-flight: free GPU resources when leaving it.
     for (const scene of [this.scene, this.mapScene]) {
       scene.traverse((o) => {
@@ -299,6 +329,10 @@ export class FlightScene implements GameScene {
   }
 
   onKeyDown(e: KeyboardEvent): void {
+    if (this.paused) {
+      if (e.code === 'Escape') this.setPaused(false);
+      return;
+    }
     switch (e.code) {
       case 'Space':
         this.doStage();
@@ -325,13 +359,41 @@ export class FlightScene implements GameScene {
       case 'KeyP':
         this.deployChute();
         break;
+      case 'KeyG':
+        this.toggleAutopilot();
+        break;
       case 'KeyR':
-        this.host.toFlight(this.defs);
+        this.host.revertVessel(this.vessel);
         break;
       case 'Escape':
-        this.host.toVAB();
+        this.setPaused(true);
         break;
     }
+  }
+
+  private setPaused(p: boolean): void {
+    this.paused = p;
+    $('pause-menu').classList.toggle('hidden', !p);
+    if (!p) return;
+    $('pause-ut').textContent = `UT ${fmtTime(STATE.t)} · ${this.vessel.name}`;
+    $('pause-resume').onclick = () => this.setPaused(false);
+    $('pause-revert').onclick = () => this.host.revertVessel(this.vessel);
+    $('pause-tovab').onclick = () => this.host.toVAB();
+    $('pause-terminate').onclick = () => this.host.removeVessel(this.vessel);
+    $('pause-recover').onclick = () => this.host.recoverVessel(this.vessel);
+    // Flight pause shows the full set (VAB pause hides these)
+    for (const id of ['pause-revert', 'pause-tovab', 'pause-terminate']) {
+      $(id).style.display = '';
+    }
+    const v = this.vessel;
+    const recoverable = v.landed && !v.destroyed && v.body === HOME;
+    $('pause-recover').style.display = recoverable ? '' : 'none';
+  }
+
+  private toggleAutopilot(): void {
+    if (this.vessel.destroyed) return;
+    const ap = this.sim.autopilot;
+    this.toast(ap.active ? ap.disengage() : ap.engage());
   }
 
   private doStage(): void {
@@ -401,8 +463,22 @@ export class FlightScene implements GameScene {
     const keys = this.host.keys;
     const v = this.vessel;
 
+    if (this.paused) {
+      // Frozen physics; camera still responds so you can look around.
+      if (this.mode === 'flight') {
+        this.syncFlight();
+        this.host.renderer.render(this.scene, this.camera);
+      } else {
+        this.syncMap();
+        this.host.renderer.render(this.mapScene, this.mapCamera);
+      }
+      this.navball.update(v);
+      this.navball.render(this.host.renderer);
+      return;
+    }
+
     // Continuous inputs
-    if (!v.destroyed) {
+    if (!v.destroyed && !this.sim.autopilot.active) {
       if (keys.has('ShiftLeft') || keys.has('ShiftRight'))
         v.throttle = Math.min(1, v.throttle + dt * 0.6);
       if (keys.has('ControlLeft') || keys.has('ControlRight'))
@@ -414,8 +490,21 @@ export class FlightScene implements GameScene {
       roll: (keys.has('KeyQ') ? 1 : 0) + (keys.has('KeyE') ? -1 : 0),
     };
 
-    const msgs = this.sim.step(Math.min(dt, 0.05), ctrl);
-    for (const m of msgs) this.toast(m);
+    const t0 = STATE.t;
+    let rem = dt;
+    while (rem > 1e-6) {
+      const chunk = Math.min(rem, 0.05);
+      for (const m of this.sim.step(chunk, ctrl)) this.toast(m);
+      rem -= chunk;
+    }
+    STATE.advanceInactive(STATE.t - t0, v);
+
+    // Autopilot staging happens inside the sim — pick up the wreckage.
+    const dropped = this.sim.dropped.splice(0);
+    if (dropped.length > 0) {
+      for (const parts of dropped) this.spawnDebris(parts);
+      this.rebuildRocket();
+    }
 
     this.milestones();
     this.updateDebris(dt);
@@ -435,6 +524,8 @@ export class FlightScene implements GameScene {
       this.syncMap();
       this.host.renderer.render(this.mapScene, this.mapCamera);
     }
+    this.navball.update(v);
+    this.navball.render(this.host.renderer);
     this.updateHUD();
   }
 
@@ -492,9 +583,9 @@ export class FlightScene implements GameScene {
       mesh.rotation.y = body.rotationAngle(t);
     }
 
-    // Sunlight from the star toward the vessel
+    // Sunlight: place the light source on the star's side of the vessel
     _v2.copy(vw).multiplyScalar(-1).normalize(); // toward star at origin
-    this.sunLight.position.copy(_v2).multiplyScalar(-10_000); // from star side
+    this.sunLight.position.copy(_v2).multiplyScalar(10_000);
     this.sunLight.target.position.set(0, 0, 0);
 
     // Rocket
@@ -602,6 +693,29 @@ export class FlightScene implements GameScene {
     const vs = dm * 0.01;
     this.vesselMarker.scale.set(vs, vs, 1);
     this.placeLabel(this.vesselLabel, this.vesselMarker.position);
+
+    // Other vessels sharing this SOI
+    for (const o of this.others) {
+      const ov = o.vessel;
+      const inWorld = STATE.vessels.includes(ov);
+      if (!inWorld || ov.destroyed || ov.body !== v.body) {
+        o.marker.visible = false;
+        o.label.style.display = 'none';
+        continue;
+      }
+      if (ov.landed) {
+        _v3.copy(ov.landedDir)
+          .applyAxisAngle(_v4.set(0, 1, 0), ov.body.rotationAngle(t))
+          .multiplyScalar(ov.body.radius);
+      } else {
+        _v3.copy(ov.pos);
+      }
+      o.marker.visible = true;
+      o.marker.position.copy(_v3).multiplyScalar(MAP_SCALE);
+      const os = o.marker.position.distanceTo(this.mapCamera.position) * 0.008;
+      o.marker.scale.set(os, os, 1);
+      this.placeLabel(o.label, o.marker.position);
+    }
 
     const path = v.landed ? null : sampleOrbit(v.pos, v.vel, v.body.mu, v.body.soi * 1.02);
     const posAttr = this.orbitGeo.getAttribute('position') as THREE.BufferAttribute;
@@ -727,6 +841,7 @@ export class FlightScene implements GameScene {
     $('fuel-fill').style.width = `${ff * 100}%`;
 
     $('sas-ind').classList.toggle('on', v.sas);
+    $('ap-ind').classList.toggle('on', this.sim.autopilot.active);
     $('stage-ind').textContent = `STAGE ${v.stageCount()}`;
     const up = _v1.set(0, 1, 0).applyQuaternion(v.q);
     const radial = _v2.copy(v.pos).normalize();

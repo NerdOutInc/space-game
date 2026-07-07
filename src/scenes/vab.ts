@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { GameHost, GameScene } from '../host';
 import { buildRocketVisual } from '../render/rocketMesh';
-import { $, fmtMass } from '../util/format';
+import { STATE } from '../state';
+import { $, fmtDist, fmtMass, fmtTime } from '../util/format';
 import { PartDef, PARTS, PART_BY_ID, SAMPLE_ROCKET } from '../vessel/parts';
 import { computeStageStats } from '../vessel/vessel';
 
@@ -12,6 +13,8 @@ export class VABScene implements GameScene {
   private rocketHolder = new THREE.Group();
   private stack: PartDef[] = [];
   private bound = false;
+  private paused = false;
+  private missionTimer = 0;
 
   constructor(host: GameHost) {
     this.host = host;
@@ -49,11 +52,63 @@ export class VABScene implements GameScene {
       this.bind();
       this.bound = true;
     }
+    this.paused = false;
     this.refresh();
+    this.refreshMissions();
   }
 
   exit(): void {
     $('vab-ui').classList.add('hidden');
+    $('pause-menu').classList.add('hidden');
+  }
+
+  onKeyDown(e: KeyboardEvent): void {
+    if (e.code === 'Escape') this.setPaused(!this.paused);
+  }
+
+  private setPaused(p: boolean): void {
+    this.paused = p;
+    $('pause-menu').classList.toggle('hidden', !p);
+    if (p) {
+      // VAB pause: only "resume" applies
+      $('pause-ut').textContent = `UT ${fmtTime(STATE.t)}`;
+      $('pause-resume').onclick = () => this.setPaused(false);
+      for (const id of ['pause-revert', 'pause-recover', 'pause-tovab', 'pause-terminate']) {
+        $(id).style.display = 'none';
+      }
+    }
+  }
+
+  private refreshMissions(): void {
+    const panel = $('missions-panel');
+    const list = $('missions-list');
+    panel.classList.toggle('hidden', STATE.vessels.length === 0);
+    list.innerHTML = '';
+    for (const v of STATE.vessels) {
+      const row = document.createElement('div');
+      row.className = 'mission-row';
+      const status = v.destroyed
+        ? `<span class="lost">LOST · ${v.body.name}</span>`
+        : v.landed
+          ? `landed · ${v.body.name}`
+          : `${v.body.name} · ${fmtDist(v.pos.length() - v.body.radius)}`;
+      const info = document.createElement('div');
+      info.innerHTML = `${v.name}<small>${status}</small>`;
+      row.appendChild(info);
+      const btn = document.createElement('button');
+      btn.className = 'btn' + (v.destroyed ? ' danger' : '');
+      btn.textContent = v.destroyed ? '✕' : 'FLY';
+      btn.addEventListener('click', () => {
+        if (v.destroyed) {
+          STATE.remove(v);
+          this.refreshMissions();
+        } else {
+          this.host.flyVessel(v);
+        }
+      });
+      row.appendChild(btn);
+      list.appendChild(row);
+    }
   }
 
   onResize(): void {
@@ -82,7 +137,7 @@ export class VABScene implements GameScene {
       this.refresh();
     });
     $('launch-btn').addEventListener('click', () => {
-      if (this.canLaunch()) this.host.toFlight([...this.stack]);
+      if (this.canLaunch()) this.host.launchVessel([...this.stack]);
     });
   }
 
@@ -149,7 +204,17 @@ export class VABScene implements GameScene {
   }
 
   update(dt: number): void {
-    this.rocketHolder.rotation.y += dt * 0.35;
+    if (!this.paused) {
+      // The world keeps turning while you build.
+      STATE.t += dt;
+      STATE.advanceInactive(dt, null);
+      this.missionTimer += dt;
+      if (this.missionTimer > 1) {
+        this.missionTimer = 0;
+        this.refreshMissions();
+      }
+      this.rocketHolder.rotation.y += dt * 0.35;
+    }
     const h = Math.max(4, this.stack.reduce((s, d) => s + d.height, 0));
     this.camera.position.set(Math.sin(0.6) * (h + 6), h * 0.62 + 1.5, Math.cos(0.6) * (h + 6));
     this.camera.lookAt(0, h * 0.45, 0);
