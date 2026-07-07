@@ -9,7 +9,7 @@ import {
 } from '../render/atmosphere';
 import { buildCampus } from '../render/campus';
 import { Navball } from '../render/navball';
-import { ReentryParticles } from '../render/particles';
+import { EnginePlume, ReentryParticles } from '../render/particles';
 import { buildFlame, buildRocketVisual } from '../render/rocketMesh';
 import { makeBodyTexture, makeDotTexture, makeStarfield } from '../render/textures';
 import { Controls, Simulation } from '../sim/simulation';
@@ -75,6 +75,7 @@ export class FlightScene implements GameScene {
   private flame: THREE.Mesh;
   private boosterFlames: THREE.Mesh[] = [];
   private particles = new ReentryParticles();
+  private plume = new EnginePlume();
   private partGroups: THREE.Group[] = [];
   private pendingBurst = false;
   private rocketHeight = 0;
@@ -180,6 +181,7 @@ export class FlightScene implements GameScene {
 
     this.flame = buildFlame();
     this.scene.add(this.particles.points);
+    this.plume.addTo(this.scene);
     this.scene.add(this.rocketHolder);
     this.rebuildRocket();
 
@@ -397,6 +399,7 @@ export class FlightScene implements GameScene {
     AUDIO.setEngineLevel(0);
     AUDIO.setChuteLevel(0);
     this.particles.dispose();
+    this.plume.dispose();
     this.navball.dispose();
     // This scene is per-flight: free GPU resources when leaving it.
     for (const scene of [this.scene, this.mapScene]) {
@@ -981,10 +984,11 @@ export class FlightScene implements GameScene {
     }
     const firing = v.destroyed ? [] : v.firingEngines(pr);
     const coreThrust = firing.some((f) => !('hostIndex' in f.part));
+    // the cone is just a short bright core now — the particles ARE the plume
     this.flame.visible = coreThrust;
     if (coreThrust) {
       const s = 0.75 + 0.5 * Math.random() * 0.3 + v.throttle * 0.6;
-      this.flame.scale.set(1, s, 1);
+      this.flame.scale.set(0.8, s * 0.45, 0.8);
     }
     // booster flames track their instance (visual order matches vessel.boosters)
     for (let i = 0; i < this.boosterFlames.length; i++) {
@@ -992,8 +996,43 @@ export class FlightScene implements GameScene {
       const on = !!b && b.ignited && b.fuel > 0 && !v.destroyed;
       this.boosterFlames[i].visible = on;
       if (on) {
-        this.boosterFlames[i].scale.set(0.8, 0.7 + Math.random() * 0.25, 0.8);
+        this.boosterFlames[i].scale.set(0.7, 0.35 + Math.random() * 0.12, 0.7);
       }
+    }
+
+    // Exhaust + smoke particles from every firing nozzle
+    if (dt > 0 && !v.destroyed) {
+      const atmoP = v.body.atmosphere;
+      let rho = 0;
+      if (atmoP && alt < atmoP.height) {
+        rho = atmoP.rho0 * Math.exp(-Math.max(0, alt) / atmoP.scaleHeight);
+      }
+      // drift keeps the plume anchored to the air (capped so orbital burns
+      // still show a readable jet instead of vanishing instantly)
+      _spin.set(0, v.body.spinRate, 0);
+      _f1.copy(v.vel).sub(_f2.crossVectors(_spin, v.pos));
+      if (_f1.length() > 120) _f1.setLength(120);
+      _f1.multiplyScalar(dt);
+      if (coreThrust) {
+        const coreLevel = Math.min(
+          1,
+          firing
+            .filter((f) => !('hostIndex' in f.part))
+            .reduce((s, f) => s + f.thrust, 0) / 215_000,
+        );
+        _f2.set(0, -this.rocketHeight / 2, 0).applyQuaternion(v.q);
+        this.plume.emit(dt, _f2, v.q, Math.max(0.25, coreLevel), rho);
+      }
+      for (let i = 0; i < this.boosterFlames.length; i++) {
+        const b = v.boosters[i];
+        if (b && b.ignited && b.fuel > 0) {
+          _f2.copy(this.boosterFlames[i].position).applyQuaternion(v.q);
+          this.plume.emit(dt, _f2, v.q, 0.9, rho);
+        }
+      }
+      this.plume.update(dt, _f1);
+    } else {
+      this.plume.update(dt, null);
     }
 
     // Space center campus (fixed to the home planet's surface plateau)
