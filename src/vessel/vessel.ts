@@ -38,6 +38,8 @@ export class Vessel {
   sas = true;
   landed = true;
   destroyed = false;
+  /** Has this vessel ever left the atmosphere? (drives the recovery bonus) */
+  reachedSpace = false;
   /** Surface-fixed unit direction of the landing spot (body frame). */
   landedDir = new THREE.Vector3(-1, 0, 0); // sunlit side at t=0
   launchedAt: number | null = null;
@@ -95,7 +97,7 @@ export class Vessel {
   dragArea(): number {
     let cda = 1.5; // rough Cd*A for the whole stack
     for (const p of this.parts) {
-      if (p.def.type === 'parachute' && p.deployed) cda += 280;
+      if (p.def.type === 'parachute' && p.deployed) cda += 380;
     }
     return cda;
   }

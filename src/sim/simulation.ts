@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { propagateKepler } from '../math/kepler';
 import { GameState } from '../state';
+import { groundHeight, isWater } from '../universe/terrain';
 import { PartInstance, Vessel } from '../vessel/vessel';
 import { Autopilot } from './autopilot';
 
@@ -14,7 +15,7 @@ export const WARP_LEVELS = [1, 2, 4, 10, 50, 100, 1000, 10000];
 const MAX_DT = 1 / 50;
 const ANG_ACCEL = 1.2; // rad/s^2 from reaction wheels
 const MAX_ANG_VEL = 2.0;
-const SAFE_LANDING_SPEED = 12; // m/s
+const SAFE_LANDING_SPEED = 15; // m/s
 
 const _t1 = new THREE.Vector3();
 const _t2 = new THREE.Vector3();
@@ -63,7 +64,9 @@ export class Simulation {
   private canRailsWarp(): boolean {
     const v = this.vessel;
     const alt = v.pos.length() - v.body.radius;
-    const minAlt = v.body.atmosphere ? v.body.atmosphere.height : 5000;
+    const minAlt = v.body.atmosphere
+      ? v.body.atmosphere.height
+      : v.body.maxTerrain + 4000;
     const thrusting = v.throttle > 1e-3 && v.firingEngines(0).length > 0;
     return alt > minAlt && !thrusting;
   }
@@ -96,10 +99,12 @@ export class Simulation {
         this.t += dt / chunks;
         this.checkSOI(msgs);
         const alt = v.pos.length() - v.body.radius;
-        const limit = (v.body.atmosphere ? v.body.atmosphere.height : 5000) + 2000;
+        const limit =
+          (v.body.atmosphere ? v.body.atmosphere.height : v.body.maxTerrain + 4000) +
+          2000;
         if (alt < limit) {
           this.warp = 1;
-          msgs.push('Approaching atmosphere — warp cancelled');
+          msgs.push('Approaching the surface — warp cancelled');
           break;
         }
       }
@@ -250,7 +255,8 @@ export class Simulation {
     const b = v.body;
     const theta = b.rotationAngle(this.t);
     _up.copy(v.landedDir).applyAxisAngle(_t1.set(0, 1, 0), theta).normalize();
-    const standR = b.radius + v.stackHeight() / 2 + 0.6;
+    const standR =
+      b.radius + groundHeight(b, v.landedDir) + v.stackHeight() / 2 + 0.6;
     v.pos.copy(_up).multiplyScalar(standR);
     _spin.set(0, b.spinRate, 0);
     v.vel.crossVectors(_spin, v.pos);
@@ -268,9 +274,16 @@ export class Simulation {
     const v = this.vessel;
     if (v.destroyed || v.landed) return;
     const b = v.body;
-    const standR = b.radius + v.stackHeight() / 2;
+    // Terrain is body-fixed: un-rotate the position before sampling height.
+    const theta = b.rotationAngle(this.t);
+    const dirFixed = _t1
+      .copy(v.pos)
+      .normalize()
+      .applyAxisAngle(_up.set(0, 1, 0), -theta);
+    const standR = b.radius + groundHeight(b, dirFixed) + v.stackHeight() / 2;
     if (v.pos.length() > standR) return;
 
+    const water = isWater(b, dirFixed);
     _spin.set(0, b.spinRate, 0);
     _t2.crossVectors(_spin, v.pos);
     const impact = _t3.copy(v.vel).sub(_t2).length();
@@ -281,13 +294,13 @@ export class Simulation {
     } else {
       v.landed = true;
       v.throttle = 0;
-      const theta = b.rotationAngle(this.t);
-      v.landedDir
-        .copy(v.pos)
-        .normalize()
-        .applyAxisAngle(_t1.set(0, 1, 0), -theta);
+      v.landedDir.copy(dirFixed);
       this.syncLanded();
-      msgs.push(`Touchdown on ${b.name} at ${impact.toFixed(1)} m/s`);
+      msgs.push(
+        water
+          ? `Splashdown on ${b.name} at ${impact.toFixed(1)} m/s`
+          : `Touchdown on ${b.name} at ${impact.toFixed(1)} m/s`,
+      );
     }
   }
 

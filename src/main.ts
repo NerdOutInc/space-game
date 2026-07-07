@@ -7,8 +7,11 @@ import { MenuScene } from './scenes/menu';
 import { VABScene } from './scenes/vab';
 import { STATE } from './state';
 import { HOME } from './universe/bodies';
+import { showToast } from './util/toast';
 import { PartDef } from './vessel/parts';
 import { Vessel } from './vessel/vessel';
+
+STATE.load();
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 
@@ -50,6 +53,9 @@ class Game implements GameHost {
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
     AUDIO.bindSliders('pv-music', 'pv-sfx');
+    // Autosave: periodically and when the tab closes
+    setInterval(() => STATE.save(), 20_000);
+    window.addEventListener('beforeunload', () => STATE.save());
   }
 
   private switchTo(scene: GameScene): void {
@@ -57,6 +63,7 @@ class Game implements GameHost {
     this.scene = scene;
     scene.onResize?.();
     scene.enter();
+    STATE.save();
   }
 
   toVAB(): void {
@@ -82,8 +89,11 @@ class Game implements GameHost {
   }
 
   recoverVessel(vessel: Vessel): void {
+    const bonus = vessel.reachedSpace ? STATE.award('recover') : null;
     STATE.remove(vessel);
     this.toVAB();
+    if (bonus) showToast(bonus);
+    showToast(`${vessel.name} recovered`);
   }
 
   removeVessel(vessel: Vessel): void {

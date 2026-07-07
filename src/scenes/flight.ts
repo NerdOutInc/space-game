@@ -8,9 +8,12 @@ import { buildFlame, buildRocketVisual } from '../render/rocketMesh';
 import { makeBodyTexture, makeDotTexture, makeStarfield } from '../render/textures';
 import { Controls, Simulation } from '../sim/simulation';
 import { STATE } from '../state';
-import { BODIES, Body, HOME } from '../universe/bodies';
+import { BODIES, Body, HELIOS, HOME } from '../universe/bodies';
+import { displacePlanetGeometry, groundHeight } from '../universe/terrain';
 import { $, fmtDist, fmtSpeed, fmtTime } from '../util/format';
+import { showToast } from '../util/toast';
 import { Vessel } from '../vessel/vessel';
+import { makeAtmosphereMaterial } from '../render/atmosphere';
 
 const MAP_SCALE = 1e-6; // meters → map units
 
@@ -81,8 +84,6 @@ export class FlightScene implements GameScene {
   private peLabel: HTMLElement;
 
   private mode: 'flight' | 'map' = 'flight';
-  private reachedSpace = false;
-  private orbitAnnounced = false;
   private endShown = false;
 
   // bound listeners for cleanup
@@ -117,8 +118,10 @@ export class FlightScene implements GameScene {
           new THREE.MeshBasicMaterial({ color: body.color }),
         );
       } else {
+        const geo = new THREE.SphereGeometry(body.radius, 192, 96);
+        displacePlanetGeometry(geo, body);
         mesh = new THREE.Mesh(
-          new THREE.SphereGeometry(body.radius, 128, 64),
+          geo,
           new THREE.MeshStandardMaterial({
             map: makeBodyTexture(body),
             roughness: 1,
@@ -152,18 +155,22 @@ export class FlightScene implements GameScene {
         new THREE.MeshBasicMaterial({ color: body.color }),
       );
       if (body.atmosphere) {
-        const atmoR = Math.max((body.radius + body.atmosphere.height) * MAP_SCALE, 0.024);
+        // Soft haze fading from the surface outward (same shader as flight view)
+        const planetR = body.radius * MAP_SCALE;
+        const shellR = (body.radius + body.atmosphere.height * 4) * MAP_SCALE;
         const haze = new THREE.Mesh(
-          new THREE.SphereGeometry(atmoR, 32, 16),
-          new THREE.MeshBasicMaterial({
-            color: body.atmosphere.skyColor,
-            transparent: true,
-            opacity: 0.45,
-            depthWrite: false,
-          }),
+          new THREE.SphereGeometry(shellR, 48, 24),
+          makeAtmosphereMaterial(
+            body.atmosphere.skyColor.clone(),
+            planetR,
+            shellR,
+            body.atmosphere.height * 1.3 * MAP_SCALE,
+            0.85,
+          ),
         );
         mesh.add(haze);
-        // Crisp ring marking the exact edge of the atmosphere (where drag ends)
+        // Faint ring at the exact edge of drag, for flight planning
+        const atmoR = (body.radius + body.atmosphere.height) * MAP_SCALE;
         const ringPts: THREE.Vector3[] = [];
         for (let i = 0; i <= 96; i++) {
           const a = (i / 96) * Math.PI * 2;
@@ -174,7 +181,7 @@ export class FlightScene implements GameScene {
           new THREE.LineBasicMaterial({
             color: body.atmosphere.skyColor,
             transparent: true,
-            opacity: 0.7,
+            opacity: 0.22,
           }),
         );
         mesh.add(ring);
@@ -428,7 +435,7 @@ export class FlightScene implements GameScene {
     const body = BODIES.find((b) => b.name === sel.value) ?? HOME;
     const input = $('debug-alt') as HTMLInputElement;
     let alt = parseFloat(input.value) * 1000;
-    const minAlt = (body.atmosphere?.height ?? 0) + 10_000;
+    const minAlt = (body.atmosphere?.height ?? body.maxTerrain) + 10_000;
     if (!isFinite(alt) || alt < minAlt) {
       alt = minAlt;
       input.value = String(Math.round(alt / 1000));
@@ -479,7 +486,8 @@ export class FlightScene implements GameScene {
       return;
     }
     const input = $('ap-alt') as HTMLInputElement;
-    const minAlt = ((this.vessel.body.atmosphere?.height ?? 0) + 10_000) / 1000;
+    const b = this.vessel.body;
+    const minAlt = ((b.atmosphere?.height ?? b.maxTerrain) + 10_000) / 1000;
     let target = parseFloat(input.value);
     if (!isFinite(target) || target < minAlt) {
       target = Math.max(minAlt, 100);
@@ -633,21 +641,40 @@ export class FlightScene implements GameScene {
     this.updateHUD();
   }
 
+  /** Science awards for exploration firsts (once per save). */
   private milestones(): void {
     const v = this.vessel;
-    if (v.destroyed || v.landed) return;
-    const alt = v.pos.length() - v.body.radius;
-    const atmoH = v.body.atmosphere?.height ?? 0;
-    if (!this.reachedSpace && alt > atmoH && v.body === HOME) {
-      this.reachedSpace = true;
-      this.toast('Reached space! ✦');
+    if (v.destroyed) return;
+    const award = (id: string) => {
+      const msg = STATE.award(id);
+      if (msg) this.toast(msg);
+    };
+    const b = v.body;
+    const lower = b.name.toLowerCase();
+
+    if (v.landed) {
+      if (b !== HOME) award(`land-${lower}`);
+      return;
     }
-    if (!this.orbitAnnounced && alt > atmoH) {
-      const el = orbitalElements(v.pos, v.vel, v.body.mu);
-      if (!el.degenerate && el.e < 1 && el.peR > v.body.radius + atmoH) {
-        this.orbitAnnounced = true;
-        this.toast(`Stable orbit around ${v.body.name} achieved! 🛰`);
+    const alt = v.pos.length() - b.radius;
+    if (b === HOME) {
+      if (alt > 10_000) award('alt10k');
+      if (alt > HOME.atmosphere!.height) {
+        v.reachedSpace = true;
+        award('space');
       }
+    } else if (b === HELIOS) {
+      award('escape');
+      v.reachedSpace = true;
+    } else {
+      award(`soi-${lower}`);
+      v.reachedSpace = true;
+    }
+    // Stable orbit: closed and periapsis clear of atmosphere/terrain
+    const clearance = b.atmosphere ? b.atmosphere.height : b.maxTerrain + 1000;
+    const el = orbitalElements(v.pos, v.vel, b.mu);
+    if (!el.degenerate && el.e < 1 && el.peR > b.radius + clearance && b !== HELIOS) {
+      award(`orbit-${lower}`);
     }
   }
 
@@ -899,13 +926,7 @@ export class FlightScene implements GameScene {
   // ---------------- HUD ----------------
 
   private toast(text: string): void {
-    const area = $('toast-area');
-    const div = document.createElement('div');
-    div.className = 'toast';
-    div.textContent = text;
-    area.appendChild(div);
-    while (area.children.length > 5) area.removeChild(area.firstChild!);
-    setTimeout(() => div.remove(), 4000);
+    showToast(text);
   }
 
   private updateHUD(): void {
@@ -915,7 +936,14 @@ export class FlightScene implements GameScene {
     const alt = r - R;
 
     $('hud-body').textContent = v.body.name;
-    $('hud-alt').textContent = fmtDist(Math.max(0, alt - this.rocketHeight / 2));
+    // Below 5 km show height above the actual terrain (AGL), else above datum
+    const theta = v.body.rotationAngle(this.sim.t);
+    const dirFixed = _v3.copy(v.pos).normalize().applyAxisAngle(_v4.set(0, 1, 0), -theta);
+    const agl = alt - groundHeight(v.body, dirFixed) - this.rocketHeight / 2;
+    $('hud-alt').textContent =
+      !v.landed && agl < 5_000
+        ? `${fmtDist(Math.max(0, agl))} AGL`
+        : fmtDist(Math.max(0, alt - this.rocketHeight / 2));
 
     _spin.set(0, v.body.spinRate, 0);
     const srf = _v1.crossVectors(_spin, v.pos).sub(v.vel).length();

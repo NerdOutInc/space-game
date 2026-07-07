@@ -86,6 +86,26 @@ the menu/flight ("cosmic glow") and the VAB ("dunes"). Volume sliders live
 on the main menu and in the pause menu (Esc); settings persist. Audio
 credits: freesound community.
 
+### Career: science & unlocks
+
+Exploration firsts earn **science** (✦): breaking 10 km, reaching space,
+orbiting, entering new spheres of influence, landing on other worlds, and
+recovering a spacefaring vessel. Spend it in the VAB to unlock the solid
+booster, the big tank, and the vacuum engine. You start with just enough
+hardware for a suborbital hop — fly it, recover it, and buy your way to
+orbit. Progress **saves automatically** (universal time, every vessel in
+flight, science, and unlocks) and the main menu offers Continue / New Game.
+
+### Terrain
+
+Every landable world has procedural heightmap terrain from a seeded noise
+field — the same function drives the rendered mesh, the surface texture
+(oceans, beaches, snow lines), and ground collision, so what you see is
+what you land on. Gaia and Ember have seas (splashdowns are gentler than
+mountainsides); Luna and Ares are all rock. Below 5 km the HUD altitude
+switches to height above ground (AGL). The launch site sits on a flattened
+plain.
+
 ### Debug tools
 
 Press `` ` `` in flight to open the debug panel: pick any body and an

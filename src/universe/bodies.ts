@@ -7,6 +7,13 @@ export interface AtmosphereDef {
   skyColor: THREE.Color;
 }
 
+export interface TerrainDef {
+  amp: number; // m, fBm amplitude
+  scale: number; // noise frequency on the unit sphere
+  bias: number; // m added to all heights (negative → more ocean)
+  ocean: boolean; // fill below-datum terrain with water
+}
+
 interface BodyOpts {
   name: string;
   radius: number;
@@ -17,6 +24,7 @@ interface BodyOpts {
   colorB: number; // secondary surface color (continents / blotches)
   isStar?: boolean;
   atmosphere?: AtmosphereDef;
+  terrain?: TerrainDef;
 }
 
 const _tmp = new THREE.Vector3();
@@ -31,6 +39,7 @@ export class Body {
   colorB: number;
   isStar: boolean;
   atmosphere?: AtmosphereDef;
+  terrain?: TerrainDef;
 
   parent: Body | null = null;
   orbitRadius = 0;
@@ -48,6 +57,12 @@ export class Body {
     this.colorB = o.colorB;
     this.isStar = o.isStar ?? false;
     this.atmosphere = o.atmosphere;
+    this.terrain = o.terrain;
+  }
+
+  /** Highest possible terrain above datum, m (0 for smooth bodies). */
+  get maxTerrain(): number {
+    return this.terrain ? this.terrain.amp + Math.max(this.terrain.bias, 0) : 0;
   }
 
   attachTo(parent: Body, orbitRadius: number, phase0 = 0): this {
@@ -131,6 +146,7 @@ export const GAIA = new Body({
     scaleHeight: 5_600,
     skyColor: new THREE.Color(0x6fb4ff),
   },
+  terrain: { amp: 6_500, scale: 2.4, bias: -800, ocean: true },
 }).attachTo(HELIOS, 13_599_840_256, 0.0);
 
 export const LUNA = new Body({
@@ -141,6 +157,7 @@ export const LUNA = new Body({
   rotationPeriod: 138_984, // tidally locked
   color: 0x9aa0a8,
   colorB: 0x6f747c,
+  terrain: { amp: 9_000, scale: 3.4, bias: 500, ocean: false },
 }).attachTo(GAIA, 12_000_000, 1.7);
 
 export const EMBER = new Body({
@@ -157,6 +174,7 @@ export const EMBER = new Body({
     scaleHeight: 7_000,
     skyColor: new THREE.Color(0xc9a0e8),
   },
+  terrain: { amp: 7_000, scale: 2.2, bias: -1_500, ocean: true },
 }).attachTo(HELIOS, 9_832_684_544, 2.4);
 
 export const ARES = new Body({
@@ -173,6 +191,7 @@ export const ARES = new Body({
     scaleHeight: 8_000,
     skyColor: new THREE.Color(0xd8a07a),
   },
+  terrain: { amp: 12_000, scale: 2.8, bias: 1_000, ocean: false },
 }).attachTo(HELIOS, 20_726_155_264, 4.4);
 
 export const BODIES: Body[] = [HELIOS, GAIA, LUNA, EMBER, ARES];

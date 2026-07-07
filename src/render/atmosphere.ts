@@ -2,15 +2,25 @@ import * as THREE from 'three';
 import { Body } from '../universe/bodies';
 
 /**
- * Fresnel rim-glow material: transparent at the disc center, glowing at the
- * limb — reads as an atmospheric halo from orbit. Includes the log-depth
- * chunks so it sorts correctly against the planet with the logarithmic
- * depth buffer enabled.
+ * Soft atmosphere: for each fragment on an oversized shell, compute the view
+ * ray's closest approach to the planet center (impact parameter b) and fade
+ * the haze with exp(-(b - planetR)/scaleH). Full density over the disc,
+ * exponential falloff above the surface, no hard geometric edge.
+ * Includes log-depth chunks so it sorts correctly against the planet.
  */
-export function makeAtmosphereMaterial(color: THREE.Color, intensity = 0.9): THREE.ShaderMaterial {
+export function makeAtmosphereMaterial(
+  color: THREE.Color,
+  planetR: number,
+  shellR: number,
+  scaleH: number,
+  intensity = 0.7,
+): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       uColor: { value: color },
+      uPlanetR: { value: planetR },
+      uShellR: { value: shellR },
+      uScaleH: { value: scaleH },
       uIntensity: { value: intensity },
     },
     vertexShader: `
@@ -30,13 +40,19 @@ export function makeAtmosphereMaterial(color: THREE.Color, intensity = 0.9): THR
       #include <common>
       #include <logdepthbuf_pars_fragment>
       uniform vec3 uColor;
+      uniform float uPlanetR;
+      uniform float uShellR;
+      uniform float uScaleH;
       uniform float uIntensity;
       varying vec3 vNormal;
       varying vec3 vView;
       void main() {
         #include <logdepthbuf_fragment>
-        float rim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vView))), 2.2);
-        gl_FragColor = vec4(uColor, rim * uIntensity);
+        float c = abs(dot(normalize(vNormal), normalize(vView)));
+        // closest approach of this view ray to the planet center
+        float b = uShellR * sqrt(max(1.0 - c * c, 0.0));
+        float depth = exp(-max(b - uPlanetR, 0.0) / uScaleH);
+        gl_FragColor = vec4(uColor, depth * uIntensity);
       }
     `,
     transparent: true,
@@ -45,12 +61,14 @@ export function makeAtmosphereMaterial(color: THREE.Color, intensity = 0.9): THR
   });
 }
 
-/** Attach a rim-glow atmosphere shell as a child of a planet mesh (flight view). */
+/** Attach a soft atmosphere shell as a child of a planet mesh (flight view). */
 export function addAtmosphereShell(planetMesh: THREE.Mesh, body: Body): void {
   if (!body.atmosphere) return;
+  const a = body.atmosphere;
+  const shellR = body.radius + a.height * 4;
   const shell = new THREE.Mesh(
-    new THREE.SphereGeometry(body.radius + body.atmosphere.height * 1.4, 96, 48),
-    makeAtmosphereMaterial(body.atmosphere.skyColor.clone(), 0.85),
+    new THREE.SphereGeometry(shellR, 96, 48),
+    makeAtmosphereMaterial(a.skyColor.clone(), body.radius, shellR, a.height * 1.3, 0.75),
   );
   planetMesh.add(shell);
 }

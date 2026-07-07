@@ -138,6 +138,14 @@ body {
 .part-btn .pname {
   color: var(--accent);
 }
+.part-btn.locked {
+  opacity: 0.62;
+  border-style: dashed;
+}
+.part-btn .lock {
+  color: var(--warn);
+  font-size: 10px;
+}
 .part-btn .pinfo {
   display: block;
   font-size: 10px;
@@ -274,7 +282,8 @@ body {
 }
 
 #toast-area {
-  position: absolute;
+  position: fixed;
+  z-index: 60;
   top: 86px;
   left: 50%;
   transform: translateX(-50%);
@@ -439,6 +448,13 @@ body {
   font-size: 12px;
   color: #8a97a5;
   letter-spacing: 0.1em;
+}
+#menu-new {
+  display: block;
+  margin-top: 10px;
+}
+#menu-new.hidden {
+  display: none;
 }
 #menu-start {
   font-size: 16px;

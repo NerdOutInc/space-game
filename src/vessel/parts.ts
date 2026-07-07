@@ -15,6 +15,8 @@ export interface PartDef {
   height: number; // m
   radius: number; // m
   info: string;
+  /** Science cost to unlock; parts without a cost are available from the start. */
+  cost?: number;
 }
 
 export const PARTS: PartDef[] = [
@@ -55,6 +57,7 @@ export const PARTS: PartDef[] = [
     height: 3.8,
     radius: 0.625,
     info: '4.0 t of propellant. Twice the tank, twice the fun.',
+    cost: 35,
   },
   {
     id: 'engine-lift',
@@ -81,6 +84,7 @@ export const PARTS: PartDef[] = [
     height: 1.0,
     radius: 0.625,
     info: '60 kN, superb in vacuum, feeble in atmosphere. Upper stages.',
+    cost: 45,
   },
   {
     id: 'decoupler',
@@ -104,6 +108,7 @@ export const PARTS: PartDef[] = [
     height: 3.5,
     radius: 0.5,
     info: '197 kN of no-off-switch enthusiasm. Cheap first-stage kick.',
+    cost: 20,
   },
 ];
 
@@ -111,6 +116,7 @@ export const PART_BY_ID: Record<string, PartDef> = Object.fromEntries(
   PARTS.map((p) => [p.id, p]),
 );
 
+/** Two-stage orbital launcher (needs unlocked parts). */
 export const SAMPLE_ROCKET: string[] = [
   'parachute',
   'capsule',
@@ -119,5 +125,14 @@ export const SAMPLE_ROCKET: string[] = [
   'decoupler',
   'tank-large',
   'tank-large',
+  'engine-lift',
+];
+
+/** Starter-parts suborbital hopper — enough to reach space and come home. */
+export const SAMPLE_STARTER: string[] = [
+  'parachute',
+  'capsule',
+  'tank-small',
+  'tank-small',
   'engine-lift',
 ];

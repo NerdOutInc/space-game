@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Body } from '../universe/bodies';
+import { terrainHeight } from '../universe/terrain';
 
 /** Deterministic PRNG so each body always looks the same. */
 function mulberry32(seed: number): () => number {
@@ -22,9 +23,18 @@ function hashName(s: string): number {
   return h >>> 0;
 }
 
+const _c1 = new THREE.Color();
+const _c2 = new THREE.Color();
+const _out = new THREE.Color();
+
+/**
+ * Planet texture painted from the SAME terrain heightfield that displaces
+ * the mesh and drives collision: oceans below datum, shaded land, snow on
+ * the peaks. UV→direction matches Three's SphereGeometry mapping.
+ */
 export function makeBodyTexture(body: Body): THREE.CanvasTexture {
-  const w = 1024;
-  const h = 512;
+  const w = body.terrain ? 640 : 512;
+  const h = w / 2;
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
@@ -32,48 +42,75 @@ export function makeBodyTexture(body: Body): THREE.CanvasTexture {
   const rand = mulberry32(hashName(body.name));
 
   const base = new THREE.Color(body.color);
-  const alt = new THREE.Color(body.colorB);
-  ctx.fillStyle = `#${base.getHexString()}`;
-  ctx.fillRect(0, 0, w, h);
+  const land = new THREE.Color(body.colorB);
 
-  // Continents / blotches
-  ctx.fillStyle = `#${alt.getHexString()}`;
-  for (let i = 0; i < 110; i++) {
-    ctx.globalAlpha = 0.25 + rand() * 0.5;
-    const x = rand() * w;
-    const y = h * 0.08 + rand() * h * 0.84;
-    const rx = 12 + rand() * 90;
-    const ry = 8 + rand() * 55;
-    ctx.beginPath();
-    ctx.ellipse(x, y, rx, ry, rand() * Math.PI, 0, Math.PI * 2);
-    ctx.fill();
-    // wrap horizontally so the seam isn't obvious
-    ctx.beginPath();
-    ctx.ellipse(x - w, y, rx, ry, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Speckle detail
-  const dark = base.clone().multiplyScalar(0.75);
-  ctx.fillStyle = `#${dark.getHexString()}`;
-  for (let i = 0; i < 900; i++) {
-    ctx.globalAlpha = 0.1 + rand() * 0.25;
-    const x = rand() * w;
-    const y = rand() * h;
-    const r = 1 + rand() * 4;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
+  if (body.terrain) {
+    const img = ctx.createImageData(w, h);
+    const data = img.data;
+    const dir = new THREE.Vector3();
+    const t = body.terrain;
+    const deepWater = base.clone().multiplyScalar(0.45);
+    const highLand = land.clone().lerp(_c1.set(0xffffff), 0.15).multiplyScalar(0.8);
+    const snow = new THREE.Color(0xe9eef4);
+    for (let py = 0; py < h; py++) {
+      const theta = ((py + 0.5) / h) * Math.PI; // from +Y pole
+      const sinT = Math.sin(theta);
+      const cosT = Math.cos(theta);
+      for (let px = 0; px < w; px++) {
+        const phi = ((px + 0.5) / w) * Math.PI * 2;
+        dir.set(-Math.cos(phi) * sinT, cosT, Math.sin(phi) * sinT);
+        const height = terrainHeight(body, dir);
+        if (t.ocean && height <= 0) {
+          // water: deeper = darker
+          const d = Math.min(1, -height / (t.amp * 0.7));
+          _out.copy(base).lerp(deepWater, d);
+        } else {
+          const f = THREE.MathUtils.clamp(height / (t.amp * 0.95), 0, 1);
+          _out.copy(land).lerp(highLand, f);
+          // beaches on ocean worlds
+          if (t.ocean && height < 250) _out.lerp(_c2.set(0xd8c9a0), 0.5);
+          // snow above the snow line
+          if (f > 0.62) _out.lerp(snow, THREE.MathUtils.smoothstep(f, 0.62, 0.85));
+        }
+        // subtle per-pixel grain
+        const g = 0.94 + rand() * 0.12;
+        const i = (py * w + px) * 4;
+        data[i] = Math.min(255, _out.r * 255 * g);
+        data[i + 1] = Math.min(255, _out.g * 255 * g);
+        data[i + 2] = Math.min(255, _out.b * 255 * g);
+        data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  } else {
+    ctx.fillStyle = `#${base.getHexString()}`;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = `#${land.getHexString()}`;
+    for (let i = 0; i < 110; i++) {
+      ctx.globalAlpha = 0.25 + rand() * 0.5;
+      const x = rand() * w;
+      const y = h * 0.08 + rand() * h * 0.84;
+      const rx = 8 + rand() * 60;
+      const ry = 5 + rand() * 35;
+      ctx.beginPath();
+      ctx.ellipse(x, y, rx, ry, rand() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(x - w, y, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   // Polar caps for worlds with atmosphere (reads as ice)
   if (body.atmosphere && !body.isStar) {
     ctx.globalAlpha = 0.85;
     ctx.fillStyle = '#e8f0f8';
-    for (const yy of [0, h - 26]) {
-      for (let x = 0; x < w; x += 8) {
-        const jitter = rand() * 14;
-        ctx.fillRect(x, yy === 0 ? 0 : yy + jitter - 14, 8, 26 - jitter + 6);
+    const cap = Math.round(h * 0.05);
+    for (const top of [true, false]) {
+      for (let x = 0; x < w; x += 6) {
+        const jitter = rand() * cap * 0.6;
+        if (top) ctx.fillRect(x, 0, 6, cap - jitter + 3);
+        else ctx.fillRect(x, h - (cap - jitter + 3), 6, cap - jitter + 3);
       }
     }
   }
@@ -85,8 +122,8 @@ export function makeBodyTexture(body: Body): THREE.CanvasTexture {
     for (let i = 0; i < 40; i++) {
       const y = rand() * h;
       const x = rand() * w;
-      const len = 60 + rand() * 220;
-      ctx.fillRect(x, y, len, 3 + rand() * 6);
+      const len = 40 + rand() * 140;
+      ctx.fillRect(x, y, len, 2 + rand() * 4);
     }
   }
 

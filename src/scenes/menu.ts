@@ -3,6 +3,7 @@ import { AUDIO } from '../audio';
 import { GameHost, GameScene } from '../host';
 import { makeAtmosphereMaterial } from '../render/atmosphere';
 import { makeBodyTexture, makeStarfield } from '../render/textures';
+import { STATE } from '../state';
 import { GAIA, LUNA } from '../universe/bodies';
 import { $ } from '../util/format';
 
@@ -26,10 +27,17 @@ export class MenuScene implements GameScene {
       new THREE.MeshStandardMaterial({ map: makeBodyTexture(GAIA), roughness: 1 }),
     );
     // Menu planet is unit-scale; size the atmosphere shell proportionally.
-    const shellScale = 1 + (GAIA.atmosphere!.height * 1.4) / GAIA.radius;
+    const a = GAIA.atmosphere!;
+    const shellScale = 1 + (a.height * 4) / GAIA.radius;
     const shell = new THREE.Mesh(
       new THREE.SphereGeometry(shellScale, 96, 48),
-      makeAtmosphereMaterial(GAIA.atmosphere!.skyColor.clone(), 0.9),
+      makeAtmosphereMaterial(
+        a.skyColor.clone(),
+        1,
+        shellScale,
+        (a.height * 1.3) / GAIA.radius,
+        0.8,
+      ),
     );
     this.gaia.add(shell);
     this.gaia.position.set(1.15, -0.25, 0);
@@ -55,11 +63,18 @@ export class MenuScene implements GameScene {
     $('menu-ui').classList.remove('hidden');
     AUDIO.playMusic('cosmic');
     AUDIO.syncSliders('vol-music', 'vol-sfx');
+    const hasSave = STATE.hasSave();
+    $('menu-start').innerHTML = hasSave ? '▲ &nbsp;CONTINUE' : '▲ &nbsp;ENTER THE VAB';
+    $('menu-new').classList.toggle('hidden', !hasSave);
     if (!this.bound) {
       this.bound = true;
       $('menu-start').addEventListener('click', () => {
         AUDIO.unlock();
         this.host.toVAB();
+      });
+      $('menu-new').addEventListener('click', () => {
+        STATE.wipeSave();
+        location.reload();
       });
       AUDIO.bindSliders('vol-music', 'vol-sfx');
     }

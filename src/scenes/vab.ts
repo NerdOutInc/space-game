@@ -4,7 +4,8 @@ import { GameHost, GameScene } from '../host';
 import { buildRocketVisual } from '../render/rocketMesh';
 import { STATE } from '../state';
 import { $, fmtDist, fmtMass, fmtTime } from '../util/format';
-import { PartDef, PARTS, PART_BY_ID, SAMPLE_ROCKET } from '../vessel/parts';
+import { showToast } from '../util/toast';
+import { PartDef, PARTS, PART_BY_ID, SAMPLE_ROCKET, SAMPLE_STARTER } from '../vessel/parts';
 import { computeStageStats } from '../vessel/vessel';
 
 export class VABScene implements GameScene {
@@ -119,19 +120,14 @@ export class VABScene implements GameScene {
   }
 
   private bind(): void {
-    const palette = $('palette-list');
-    for (const def of PARTS) {
-      const btn = document.createElement('button');
-      btn.className = 'part-btn';
-      btn.innerHTML = `<span class="pname">${def.name}</span><span class="pinfo">${def.info}</span>`;
-      btn.addEventListener('click', () => {
-        this.stack.push(def);
-        this.refresh();
-      });
-      palette.appendChild(btn);
-    }
     $('sample-btn').addEventListener('click', () => {
-      this.stack = SAMPLE_ROCKET.map((id) => PART_BY_ID[id]);
+      // Load the orbital sample once its parts are unlocked; the starter
+      // hopper otherwise (it can reach space and come home for science).
+      const orbitalOk = SAMPLE_ROCKET.every((id) => STATE.isUnlocked(PART_BY_ID[id]));
+      this.stack = (orbitalOk ? SAMPLE_ROCKET : SAMPLE_STARTER).map(
+        (id) => PART_BY_ID[id],
+      );
+      if (!orbitalOk) showToast('Starter hopper loaded — unlock more parts for the orbital rocket');
       this.refresh();
     });
     $('clear-btn').addEventListener('click', () => {
@@ -151,6 +147,28 @@ export class VABScene implements GameScene {
   }
 
   private refresh(): void {
+    // Parts palette (rebuilt so lock state stays current)
+    const palette = $('palette-list');
+    palette.innerHTML = '';
+    for (const def of PARTS) {
+      const unlocked = STATE.isUnlocked(def);
+      const btn = document.createElement('button');
+      btn.className = 'part-btn' + (unlocked ? '' : ' locked');
+      const lockTag = unlocked ? '' : ` <span class="lock">🔒 ${def.cost} ✦</span>`;
+      btn.innerHTML = `<span class="pname">${def.name}${lockTag}</span><span class="pinfo">${def.info}</span>`;
+      btn.addEventListener('click', () => {
+        if (STATE.isUnlocked(def)) {
+          this.stack.push(def);
+        } else if (STATE.unlockPart(def)) {
+          showToast(`Unlocked ${def.name}!`);
+        } else {
+          showToast(`Need ${def.cost} ✦ science to unlock ${def.name}`);
+        }
+        this.refresh();
+      });
+      palette.appendChild(btn);
+    }
+
     // Stack list
     const list = $('stack-list');
     list.innerHTML = '';
@@ -174,6 +192,7 @@ export class VABScene implements GameScene {
     const mass = this.stack.reduce((s, d) => s + d.dryMass + (d.fuel ?? 0), 0);
     const height = this.stack.reduce((s, d) => s + d.height, 0);
     let html = `
+      <div class="srow"><span>Science</span><b>✦ ${STATE.science}</b></div>
       <div class="srow"><span>Parts</span><b>${this.stack.length}</b></div>
       <div class="srow"><span>Height</span><b>${height.toFixed(1)} m</b></div>
       <div class="srow"><span>Mass</span><b>${fmtMass(mass)}</b></div>`;

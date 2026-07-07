@@ -14,6 +14,7 @@
         <h1>ZENITH<br /><span>SPACE PROGRAM</span></h1>
         <p class="menu-tag">Build a rocket. Escape the sky. Bring them home.</p>
         <button id="menu-start" class="btn launch">▲ &nbsp;ENTER THE VAB</button>
+        <button id="menu-new" class="btn danger hidden">NEW GAME (wipe save)</button>
         <div class="menu-settings panel">
           <h3>Sound</h3>
           <label>MUSIC <input type="range" id="vol-music" min="0" max="100" /></label>
@@ -51,7 +52,7 @@
 
     <!-- ============ FLIGHT ============ -->
     <div id="flight-ui" class="ui hidden">
-      <div id="hud-top" class="panel">
+      <div id="hud-top" class="panel hud-top">
         <div class="stat"><label>BODY</label><span id="hud-body">Gaia</span></div>
         <div class="stat"><label>ALT</label><span id="hud-alt">0 m</span></div>
         <div class="stat"><label id="hud-vel-label">SRF VEL</label><span id="hud-vel">0 m/s</span></div>
@@ -60,7 +61,6 @@
         <div class="stat"><label>MET</label><span id="hud-met">PRE-LAUNCH</span></div>
         <div class="stat"><label>WARP</label><span id="hud-warp">1×</span></div>
       </div>
-      <div id="toast-area"></div>
       <div id="hud-left" class="panel">
         <div class="gauge">
           <label>THROTTLE <span id="throttle-pct">100%</span></label>
@@ -116,6 +116,8 @@
         </div>
       </div>
     </div>
+
+    <div id="toast-area"></div>
 
     <!-- ============ PAUSE (shared) ============ -->
     <div id="pause-menu" class="hidden">
