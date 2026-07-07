@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zenith Space Program</title>
+  </head>
+  <body>
+    <canvas id="game-canvas"></canvas>
+
+    <!-- ============ VAB (builder) ============ -->
+    <div id="vab-ui" class="ui hidden">
+      <div class="vab-title">VEHICLE ASSEMBLY<br /><span>Zenith Space Program</span></div>
+      <div id="part-palette" class="panel">
+        <h3>Parts</h3>
+        <div id="palette-list"></div>
+        <div class="palette-actions">
+          <button id="sample-btn" class="btn">Load sample rocket</button>
+          <button id="clear-btn" class="btn danger">Clear stack</button>
+        </div>
+      </div>
+      <div id="stack-panel" class="panel">
+        <h3>Stack <span class="hint">top → bottom</span></h3>
+        <div id="stack-list"></div>
+        <div id="vab-stats"></div>
+      </div>
+      <button id="launch-btn" class="btn launch">▲ &nbsp;LAUNCH</button>
+      <div class="vab-help panel">
+        Click a part to add it to the <b>bottom</b> of the stack; click a stacked part to remove
+        it. Put the capsule on top, an engine at the bottom, and a decoupler between stages.
+      </div>
+    </div>
+
+    <!-- ============ FLIGHT ============ -->
+    <div id="flight-ui" class="ui hidden">
+      <div id="hud-top" class="panel">
+        <div class="stat"><label>BODY</label><span id="hud-body">Gaia</span></div>
+        <div class="stat"><label>ALT</label><span id="hud-alt">0 m</span></div>
+        <div class="stat"><label id="hud-vel-label">SRF VEL</label><span id="hud-vel">0 m/s</span></div>
+        <div class="stat"><label>AP</label><span id="hud-ap">—</span></div>
+        <div class="stat"><label>PE</label><span id="hud-pe">—</span></div>
+        <div class="stat"><label>MET</label><span id="hud-met">PRE-LAUNCH</span></div>
+        <div class="stat"><label>WARP</label><span id="hud-warp">1×</span></div>
+      </div>
+      <div id="toast-area"></div>
+      <div id="hud-left" class="panel">
+        <div class="gauge">
+          <label>THROTTLE <span id="throttle-pct">100%</span></label>
+          <div class="bar"><div id="throttle-fill"></div></div>
+        </div>
+        <div class="gauge">
+          <label>STAGE FUEL <span id="fuel-pct">100%</span></label>
+          <div class="bar"><div id="fuel-fill" class="fuel"></div></div>
+        </div>
+        <div class="row">
+          <span id="sas-ind" class="ind on">SAS</span>
+          <span id="stage-ind" class="ind">STAGE 1</span>
+          <span id="tilt-ind" class="ind">TILT 0°</span>
+        </div>
+      </div>
+      <div id="hud-right" class="panel">
+        <div class="btn-row">
+          <button class="btn" id="btn-stage">STAGE&nbsp;␣</button>
+          <button class="btn" id="btn-map">MAP&nbsp;M</button>
+          <button class="btn" id="btn-warp-down">◀&nbsp;WARP</button>
+          <button class="btn" id="btn-warp-up">WARP&nbsp;▶</button>
+        </div>
+        <div class="keys">
+          <b>Shift/Ctrl</b> throttle · <b>Z/X</b> full/cut · <b>Space</b> ignite/stage<br />
+          <b>W/S</b> pitch · <b>A/D</b> yaw · <b>Q/E</b> roll · <b>T</b> SAS<br />
+          <b>, / .</b> time warp · <b>M</b> map · <b>P</b> parachute<br />
+          <b>R</b> revert to launch · <b>Esc</b> back to VAB · drag/scroll: camera
+        </div>
+      </div>
+      <div id="map-info" class="panel hidden"></div>
+      <div id="map-labels"></div>
+      <div id="end-dialog" class="panel hidden">
+        <h2 id="end-title">Vessel destroyed</h2>
+        <p id="end-msg"></p>
+        <div class="btn-row">
+          <button class="btn" id="end-revert">Revert to launch</button>
+          <button class="btn" id="end-vab">Back to VAB</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
