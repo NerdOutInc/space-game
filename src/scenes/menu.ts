@@ -93,19 +93,24 @@ export class MenuScene implements GameScene {
     this.onResize();
   }
 
-  private choosingMode = false;
-
   enter(): void {
     $('menu-ui').classList.remove('hidden');
     AUDIO.playMusic('cosmic');
     AUDIO.syncSliders('vol-music', 'vol-sfx');
-    this.choosingMode = !STATE.hasSave();
-    this.refreshButtons();
+    // Load Save only appears when there's a save to load; the two New Game
+    // buttons are always available (with a warning when they'd replace one).
+    const hasSave = STATE.hasSave();
+    $('menu-load').classList.toggle('hidden', !hasSave);
+    $('menu-wipe-hint').classList.toggle('hidden', !hasSave);
     if (!this.bound) {
       this.bound = true;
+      $('menu-load').addEventListener('click', () => {
+        AUDIO.unlock();
+        this.host.toVAB();
+      });
       $('menu-start').addEventListener('click', () => {
         AUDIO.unlock();
-        if (this.choosingMode) STATE.reset('science');
+        STATE.reset('science');
         this.host.toVAB();
       });
       $('menu-free').addEventListener('click', () => {
@@ -113,24 +118,7 @@ export class MenuScene implements GameScene {
         STATE.reset('freedom');
         this.host.toVAB();
       });
-      $('menu-new').addEventListener('click', () => {
-        this.choosingMode = true;
-        this.refreshButtons();
-      });
       AUDIO.bindSliders('vol-music', 'vol-sfx');
-    }
-  }
-
-  /** CONTINUE + NEW GAME when a save exists; the two mode buttons otherwise. */
-  private refreshButtons(): void {
-    if (this.choosingMode) {
-      $('menu-start').innerHTML = '▲ &nbsp;SCIENCE MODE';
-      $('menu-free').classList.remove('hidden');
-      $('menu-new').classList.add('hidden');
-    } else {
-      $('menu-start').innerHTML = '▲ &nbsp;CONTINUE';
-      $('menu-free').classList.add('hidden');
-      $('menu-new').classList.remove('hidden');
     }
   }
 

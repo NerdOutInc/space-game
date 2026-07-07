@@ -336,7 +336,7 @@ export class VABScene implements GameScene {
     const height = this.stack.reduce((s, c) => s + c.def.height, 0);
     const modeRow =
       STATE.mode === 'freedom'
-        ? `<div class="srow"><span>Mode</span><b>FREEDOM</b></div>`
+        ? `<div class="srow"><span>Mode</span><b>SANDBOX</b></div>`
         : `<div class="srow"><span>Science</span><b>✦ ${STATE.science}</b></div>`;
     let html = `
       ${modeRow}

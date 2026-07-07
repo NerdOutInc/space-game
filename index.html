@@ -13,9 +13,14 @@
       <div id="menu-box">
         <h1>ZENITH<br /><span>SPACE PROGRAM</span></h1>
         <p class="menu-tag">Build a rocket. Escape the sky. Bring them home.</p>
-        <button id="menu-start" class="btn launch">▲ &nbsp;SCIENCE MODE</button>
-        <button id="menu-free" class="btn launch secondary">▲ &nbsp;FREEDOM MODE</button>
-        <button id="menu-new" class="btn danger hidden">NEW GAME (wipe save)</button>
+        <button id="menu-load" class="btn launch hidden">▶ &nbsp;LOAD SAVE</button>
+        <div class="menu-newrow">
+          <button id="menu-start" class="btn newgame">NEW GAME<br /><span>SCIENCE</span></button>
+          <button id="menu-free" class="btn newgame">NEW GAME<br /><span>SANDBOX</span></button>
+        </div>
+        <p id="menu-wipe-hint" class="menu-hint hidden">
+          starting a new game replaces your current save
+        </p>
         <div class="menu-settings panel">
           <h3>Sound</h3>
           <label>MUSIC <input type="range" id="vol-music" min="0" max="100" /></label>

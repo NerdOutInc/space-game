@@ -70,7 +70,6 @@ export class FlightScene implements GameScene {
   private rocketHolder = new THREE.Group();
   private flame: THREE.Mesh;
   private boosterFlames: THREE.Mesh[] = [];
-  private plasma: THREE.Mesh;
   private particles = new ReentryParticles();
   private partGroups: THREE.Group[] = [];
   private pendingBurst = false;
@@ -168,12 +167,6 @@ export class FlightScene implements GameScene {
     }
 
     this.flame = buildFlame();
-    // reentry plasma sheath (oriented along the airflow while it glows)
-    this.plasma = buildFlame();
-    (this.plasma.material as THREE.MeshBasicMaterial).color.set(0xff7a30);
-    (this.plasma.material as THREE.MeshBasicMaterial).opacity = 0.5;
-    this.plasma.visible = false;
-    this.scene.add(this.plasma);
     this.scene.add(this.particles.points);
     this.scene.add(this.rocketHolder);
     this.rebuildRocket();
@@ -912,8 +905,26 @@ export class FlightScene implements GameScene {
       mesh.rotation.y = body.rotationAngle(t);
     }
 
-    // Sunlight: place the light source on the star's side of the vessel
-    _v2.copy(vw).multiplyScalar(-1).normalize(); // toward star at origin
+    // Sunlight: place the light source on the star's side of the vessel,
+    // and eclipse it when a body sits between the vessel and Helios (soft
+    // ambient stays on so the night side remains playable).
+    const sunDist = vw.length();
+    _v2.copy(vw).multiplyScalar(-1 / sunDist); // unit vector toward the star
+    let lit = 1;
+    for (const body of BODIES) {
+      if (body.isStar) continue;
+      body.worldPosition(t, _v3).sub(vw); // vessel → body center
+      const along = _v3.dot(_v2);
+      if (along <= 0 || along >= sunDist) continue; // body not between us and the sun
+      const missSq = Math.max(0, _v3.lengthSq() - along * along);
+      const miss = Math.sqrt(missSq);
+      // soft penumbra edge over ~4% of the body radius
+      lit = Math.min(
+        lit,
+        THREE.MathUtils.clamp((miss - body.radius) / (body.radius * 0.04), 0, 1),
+      );
+    }
+    this.sunLight.intensity = 2.2 * lit;
     this.sunLight.position.copy(_v2).multiplyScalar(10_000);
     this.sunLight.target.position.set(0, 0, 0);
 
@@ -1007,7 +1018,7 @@ export class FlightScene implements GameScene {
       (this.stars.material as THREE.PointsMaterial).opacity = 0.95;
     }
 
-    // Reentry effects: plasma cone, skin particles, and part heat glow
+    // Reentry effects: skin particles and part heat glow
     {
       const atmo2 = v.body.atmosphere;
       let heat = 0;
@@ -1020,21 +1031,7 @@ export class FlightScene implements GameScene {
         heat = 2e-6 * rho * va * va * va;
         if (heat > 10 && va > 30) {
           vAirHat = vAir.divideScalar(va); // = _v3
-          this.plasma.visible = true;
-          const s = Math.min(1.6, 0.35 + heat / 120);
-          this.plasma.scale.set(3.2 * s, 4.5 * s, 3.2 * s);
-          this.plasma.position.copy(vAirHat).multiplyScalar(this.rocketHeight * 0.3);
-          this.plasma.quaternion.setFromUnitVectors(
-            _v4.set(0, -1, 0),
-            _v2.copy(vAirHat).negate(),
-          );
-          (this.plasma.material as THREE.MeshBasicMaterial).opacity =
-            0.25 + Math.min(0.5, heat / 250);
-        } else {
-          this.plasma.visible = false;
         }
-      } else {
-        this.plasma.visible = false;
       }
 
       // Particles hug the hull and stream downstream (-vAir); a shower marks
