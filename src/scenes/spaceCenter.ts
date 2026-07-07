@@ -1,24 +1,12 @@
 import * as THREE from 'three';
 import { AUDIO } from '../audio';
 import { GameHost, GameScene } from '../host';
+import { buildCampus } from '../render/campus';
+import { buildRocketVisual } from '../render/rocketMesh';
 import { STATE } from '../state';
 import { HOME } from '../universe/bodies';
 import { PAD_DIR } from '../universe/terrain';
 import { $, fmtDist, fmtTime } from '../util/format';
-
-function building(
-  w: number,
-  h: number,
-  d: number,
-  color: number,
-): THREE.Mesh {
-  const m = new THREE.Mesh(
-    new THREE.BoxGeometry(w, h, d),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.85 }),
-  );
-  m.position.y = h / 2;
-  return m;
-}
 
 /**
  * The Zenith Space Center: a ground-level hub on the launch plateau with
@@ -37,6 +25,8 @@ export class SpaceCenterScene implements GameScene {
   private autoSpin = true;
   private bound = false;
   private trackTimer = 0;
+  private padVisual: THREE.Group | null = null;
+  private padSig = '';
 
   private onPointerDown = (e: PointerEvent) => {
     this.dragging = true;
@@ -67,60 +57,8 @@ export class SpaceCenterScene implements GameScene {
     ground.rotation.x = -Math.PI / 2;
     this.scene.add(ground);
 
-    // Launch pad (offset — the buildings sit beside it, KSC-style)
-    const pad = new THREE.Mesh(
-      new THREE.CylinderGeometry(16, 18, 2.4, 32),
-      new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.85 }),
-    );
-    pad.position.set(70, 1.2, -20);
-    this.scene.add(pad);
-    const tower = building(3, 34, 3, 0x8a2f2a);
-    tower.position.set(84, 17, -30);
-    this.scene.add(tower);
-
-    // VAB: the big one
-    const vab = building(46, 64, 40, 0xb8bec6);
-    vab.position.set(-45, 32, -55);
-    this.scene.add(vab);
-    const vabStripe = building(46.6, 12, 40.6, 0x2e62c9);
-    vabStripe.position.set(-45, 40, -55);
-    this.scene.add(vabStripe);
-
-    // Tracking station: dome + dish
-    const dome = new THREE.Mesh(
-      new THREE.SphereGeometry(9, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: 0xd8dde2, roughness: 0.6 }),
-    );
-    dome.position.set(-15, 0, 60);
-    this.scene.add(dome);
-    const dish = new THREE.Mesh(
-      new THREE.SphereGeometry(7, 24, 12, 0, Math.PI * 2, 0, Math.PI / 3),
-      new THREE.MeshStandardMaterial({
-        color: 0xe8eef4,
-        roughness: 0.4,
-        side: THREE.DoubleSide,
-      }),
-    );
-    dish.position.set(-32, 8, 66);
-    dish.rotation.z = Math.PI / 2.6;
-    this.scene.add(dish);
-    const mast = building(1.2, 8, 1.2, 0x555c66);
-    mast.position.set(-32, 4, 66);
-    this.scene.add(mast);
-
-    // Fuel farm
-    for (const [x, z] of [
-      [30, 40],
-      [38, 44],
-      [34, 52],
-    ] as const) {
-      const tank = new THREE.Mesh(
-        new THREE.CylinderGeometry(4, 4, 10, 16),
-        new THREE.MeshStandardMaterial({ color: 0xc7cbd1, roughness: 0.5 }),
-      );
-      tank.position.set(x, 5, z);
-      this.scene.add(tank);
-    }
+    // Pad + buildings + floodlights (shared with the flight scene)
+    this.scene.add(buildCampus());
 
     this.sun = new THREE.DirectionalLight(0xfff4e0, 2.0);
     this.scene.add(this.sun);
@@ -148,6 +86,34 @@ export class SpaceCenterScene implements GameScene {
     window.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
     this.refreshTracking();
+    this.updatePadVessel();
+  }
+
+  /** If a vessel is parked on the pad, show it standing there. */
+  private updatePadVessel(): void {
+    const occ = STATE.vessels.find(
+      (v) =>
+        v.landed &&
+        !v.destroyed &&
+        v.body === HOME &&
+        v.landedDir.angleTo(PAD_DIR) < 0.01,
+    );
+    const sig = occ ? `${occ.name}:${occ.parts.length}:${occ.deployedChutes()}` : '';
+    if (sig === this.padSig) return;
+    this.padSig = sig;
+    if (this.padVisual) {
+      this.scene.remove(this.padVisual);
+      this.padVisual = null;
+    }
+    if (occ) {
+      const { group, height } = buildRocketVisual(occ.parts, [
+        ...occ.boosters,
+        ...occ.radialChutes,
+      ]);
+      group.position.set(0, 2.4 + height / 2, 0);
+      this.scene.add(group);
+      this.padVisual = group;
+    }
   }
 
   exit(): void {
@@ -231,6 +197,7 @@ export class SpaceCenterScene implements GameScene {
     if (this.trackTimer > 1) {
       this.trackTimer = 0;
       if (!$('tracking-panel').classList.contains('hidden')) this.refreshTracking();
+      this.updatePadVessel();
       $('sc-info').textContent =
         `UT ${fmtTime(STATE.t)} · ${STATE.mode === 'freedom' ? 'SANDBOX' : `✦ ${STATE.science}`} · ${STATE.vessels.length} in flight`;
     }
@@ -255,13 +222,13 @@ export class SpaceCenterScene implements GameScene {
     void east;
 
     if (this.autoSpin) this.yaw += dt * 0.05;
-    const dist = 150 * this.zoom;
+    const dist = 170 * this.zoom;
     this.camera.position.set(
-      Math.sin(this.yaw) * dist,
-      55 * this.zoom + 12,
-      Math.cos(this.yaw) * dist,
+      Math.sin(this.yaw) * dist - 40,
+      58 * this.zoom + 12,
+      Math.cos(this.yaw) * dist + 10,
     );
-    this.camera.lookAt(0, 14, 0);
+    this.camera.lookAt(-45, 16, 5);
     this.host.renderer.render(this.scene, this.camera);
   }
 }

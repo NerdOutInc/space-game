@@ -47,6 +47,16 @@ export const PARTS: PartDef[] = [
     info: 'Deploy with P below 40 km in atmosphere. Put it on top.',
   },
   {
+    id: 'dock-small',
+    name: 'D-0 Junior Dock',
+    type: 'dock',
+    dryMass: 60,
+    height: 0.3,
+    radius: 0.3,
+    info: 'Compact magnetic port for capsules. Top of the stack, nose-first, gently. U undocks.',
+    cost: 25,
+  },
+  {
     id: 'dock',
     name: 'D-1 Magnetic Dock',
     type: 'dock',
@@ -167,28 +177,35 @@ export function canHostChutes(def: PartDef): boolean {
   return def.type === 'capsule' || def.type === 'tank' || def.type === 'dock';
 }
 
+export interface SampleSlot {
+  id: string;
+  boosters?: number;
+  chutes?: number;
+}
+
 /**
- * Three-stage orbital launcher with a proper reentry capsule on top
- * (chute + capsule + heat shield come home together). Needs unlocked parts.
+ * Three-stage orbital launcher whose return stage is docking-capable:
+ * junior dock on the nose, radial parachutes on the capsule, heat shield
+ * below. Needs unlocked parts.
  */
-export const SAMPLE_ROCKET: string[] = [
-  'parachute',
-  'capsule',
-  'shield',
-  'decoupler',
-  'tank-small',
-  'engine-vac',
-  'decoupler',
-  'tank-large',
-  'tank-large',
-  'engine-lift',
+export const SAMPLE_ROCKET: SampleSlot[] = [
+  { id: 'dock-small' },
+  { id: 'capsule', chutes: 2 },
+  { id: 'shield' },
+  { id: 'decoupler' },
+  { id: 'tank-small' },
+  { id: 'engine-vac' },
+  { id: 'decoupler' },
+  { id: 'tank-large' },
+  { id: 'tank-large' },
+  { id: 'engine-lift' },
 ];
 
 /** Starter-parts suborbital hopper — enough to reach space and come home. */
-export const SAMPLE_STARTER: string[] = [
-  'parachute',
-  'capsule',
-  'tank-small',
-  'tank-small',
-  'engine-lift',
+export const SAMPLE_STARTER: SampleSlot[] = [
+  { id: 'parachute' },
+  { id: 'capsule' },
+  { id: 'tank-small' },
+  { id: 'tank-small' },
+  { id: 'engine-lift' },
 ];

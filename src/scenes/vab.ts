@@ -175,11 +175,11 @@ export class VABScene implements GameScene {
     $('sample-btn').addEventListener('click', () => {
       // Load the orbital sample once its parts are unlocked; the starter
       // hopper otherwise (it can reach space and come home for science).
-      const orbitalOk = SAMPLE_ROCKET.every((id) => STATE.isUnlocked(PART_BY_ID[id]));
-      this.stack = (orbitalOk ? SAMPLE_ROCKET : SAMPLE_STARTER).map((id) => ({
-        def: PART_BY_ID[id],
-        boosters: 0,
-        chutes: 0,
+      const orbitalOk = SAMPLE_ROCKET.every((s) => STATE.isUnlocked(PART_BY_ID[s.id]));
+      this.stack = (orbitalOk ? SAMPLE_ROCKET : SAMPLE_STARTER).map((s) => ({
+        def: PART_BY_ID[s.id],
+        boosters: s.boosters ?? 0,
+        chutes: s.chutes ?? 0,
       }));
       if (!orbitalOk)
         showToast('Starter hopper loaded — unlock more parts for the orbital rocket');

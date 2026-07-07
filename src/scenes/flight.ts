@@ -7,6 +7,7 @@ import {
   makeAtmosphereMaterial,
   updateAtmosphereSun,
 } from '../render/atmosphere';
+import { buildCampus } from '../render/campus';
 import { Navball } from '../render/navball';
 import { ReentryParticles } from '../render/particles';
 import { buildFlame, buildRocketVisual } from '../render/rocketMesh';
@@ -28,6 +29,7 @@ const _v4 = new THREE.Vector3();
 const _spin = new THREE.Vector3();
 const _f1 = new THREE.Vector3();
 const _f2 = new THREE.Vector3();
+const _campusMat = new THREE.Matrix4();
 
 interface Debris {
   group: THREE.Group;
@@ -77,7 +79,7 @@ export class FlightScene implements GameScene {
   private pendingBurst = false;
   private rocketHeight = 0;
   private lastOwnSig = -1;
-  private pad: THREE.Mesh;
+  private campus: THREE.Group;
   private debris: Debris[] = [];
   /** Nearby vessels rendered in the flight view (docking partners etc.). */
   private nearby = new Map<Vessel, { group: THREE.Group; sig: number }>();
@@ -97,6 +99,8 @@ export class FlightScene implements GameScene {
   private allLabels: HTMLElement[] = [];
   private orbitLine: THREE.Line;
   private orbitGeo: THREE.BufferGeometry;
+  private selOrbitLine!: THREE.Line;
+  private selOrbitGeo!: THREE.BufferGeometry;
   private apMarker: THREE.Sprite;
   private peMarker: THREE.Sprite;
   private apLabel: HTMLElement;
@@ -179,11 +183,9 @@ export class FlightScene implements GameScene {
     this.scene.add(this.rocketHolder);
     this.rebuildRocket();
 
-    this.pad = new THREE.Mesh(
-      new THREE.CylinderGeometry(7, 8, 1.2, 24),
-      new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.85 }),
-    );
-    this.scene.add(this.pad);
+    // The whole space center campus sits at the launch site (floodlit!)
+    this.campus = buildCampus();
+    this.scene.add(this.campus);
 
     // ---------- map scene ----------
     const dot = makeDotTexture();
@@ -300,6 +302,22 @@ export class FlightScene implements GameScene {
     );
     this.orbitLine.frustumCulled = false;
     this.mapScene.add(this.orbitLine);
+
+    // second conic for whatever vessel is focused in the map
+    this.selOrbitGeo = new THREE.BufferGeometry();
+    this.selOrbitGeo.setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array(600 * 3), 3).setUsage(
+        THREE.DynamicDrawUsage,
+      ),
+    );
+    this.selOrbitLine = new THREE.Line(
+      this.selOrbitGeo,
+      new THREE.LineBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.9 }),
+    );
+    this.selOrbitLine.frustumCulled = false;
+    this.selOrbitLine.visible = false;
+    this.mapScene.add(this.selOrbitLine);
 
     this.apMarker = new THREE.Sprite(
       new THREE.SpriteMaterial({ map: dot, color: 0x7fd4ff, depthTest: false }),
@@ -978,16 +996,21 @@ export class FlightScene implements GameScene {
       }
     }
 
-    // Launch pad (fixed to the home planet's surface, on its plateau)
+    // Space center campus (fixed to the home planet's surface plateau)
     const theta = HOME.rotationAngle(t);
-    _v3.copy(PAD_DIR).applyAxisAngle(_v4.set(0, 1, 0), theta);
+    _v3.copy(PAD_DIR).applyAxisAngle(_v4.set(0, 1, 0), theta); // local up
     const padWorld = HOME.worldPosition(t, _v2).addScaledVector(
       _v3,
-      HOME.radius + groundHeight(HOME, PAD_DIR) + 0.3,
+      HOME.radius + groundHeight(HOME, PAD_DIR) - 1.2,
     );
-    this.pad.position.copy(padWorld.sub(vw));
-    this.pad.quaternion.setFromUnitVectors(_v4.set(0, 1, 0), _v3);
-    this.pad.visible = this.pad.position.length() < 30_000;
+    this.campus.position.copy(padWorld.sub(vw));
+    this.campus.visible = this.campus.position.length() < 60_000;
+    if (this.campus.visible) {
+      _f1.crossVectors(_v4.set(0, 1, 0), _v3).normalize(); // east
+      _f2.crossVectors(_v3, _f1); // north
+      _campusMat.makeBasis(_f1, _v3, _f2);
+      this.campus.quaternion.setFromRotationMatrix(_campusMat);
+    }
 
     // Debris
     for (const d of this.debris) {
@@ -1167,6 +1190,9 @@ export class FlightScene implements GameScene {
       if (vis.orbit && body.parent) {
         body.parent.worldPosition(t, _v3).sub(focus).multiplyScalar(MAP_SCALE);
         vis.orbit.position.copy(_v3);
+        // the focused body's own orbit lights up
+        (vis.orbit.material as THREE.LineBasicMaterial).opacity =
+          this.mapFocus === body ? 0.95 : 0.45;
       }
       this.placeLabel(vis.label, vis.mesh.position);
     }
@@ -1237,15 +1263,61 @@ export class FlightScene implements GameScene {
       vOff.z * MAP_SCALE,
     );
 
-    // Ap / Pe markers
-    const el = v.landed ? null : orbitalElements(v.pos, v.vel, v.body.mu);
-    const R = v.body.radius;
-    if (el && !el.degenerate && el.peR > 0) {
+    // ---- selection: whose conic and Ap/Pe do we highlight?
+    const fSel = this.mapFocus;
+    const selVessel = fSel instanceof Vessel ? fSel : null;
+    // null focus = your own ship; a body focus shows no Ap/Pe at all
+    const target = fSel === null ? v : selVessel;
+
+    // Focused vessel gets its own drawn conic (cyan) around ITS body
+    if (selVessel && !selVessel.landed && !selVessel.destroyed) {
+      const sOff = selVessel.body.worldPosition(t, _f2).sub(focus); // stays in _f2
+      const sPath = sampleOrbit(
+        selVessel.pos,
+        selVessel.vel,
+        selVessel.body.mu,
+        selVessel.body.soi * 1.02,
+      );
+      const sAttr = this.selOrbitGeo.getAttribute('position') as THREE.BufferAttribute;
+      if (sPath) {
+        const pts = sPath.points;
+        const n = Math.min(pts.length, sPath.closed ? 599 : 600);
+        for (let i = 0; i < n; i++) {
+          sAttr.setXYZ(i, pts[i].x * MAP_SCALE, pts[i].y * MAP_SCALE, pts[i].z * MAP_SCALE);
+        }
+        let count = n;
+        if (sPath.closed && n > 0) {
+          sAttr.setXYZ(n, pts[0].x * MAP_SCALE, pts[0].y * MAP_SCALE, pts[0].z * MAP_SCALE);
+          count = n + 1;
+        }
+        sAttr.needsUpdate = true;
+        this.selOrbitGeo.setDrawRange(0, count);
+        this.selOrbitLine.position.set(
+          sOff.x * MAP_SCALE,
+          sOff.y * MAP_SCALE,
+          sOff.z * MAP_SCALE,
+        );
+        this.selOrbitLine.visible = true;
+      } else {
+        this.selOrbitLine.visible = false;
+      }
+    } else {
+      this.selOrbitLine.visible = false;
+    }
+
+    // Ap / Pe markers — only for the selected item
+    const el =
+      target && !target.landed
+        ? orbitalElements(target.pos, target.vel, target.body.mu)
+        : null;
+    const R = target ? target.body.radius : v.body.radius;
+    const anchor = target === v ? vOff : _f2; // _f2 holds the sel body offset
+    if (el && !el.degenerate && el.peR > 0 && target) {
       this.peMarker.visible = true;
       this.peMarker.position
         .copy(el.pHat)
         .multiplyScalar(el.peR * MAP_SCALE)
-        .addScaledVector(vOff, MAP_SCALE);
+        .addScaledVector(anchor, MAP_SCALE);
       const s1 = this.peMarker.position.distanceTo(this.mapCamera.position) * 0.008;
       this.peMarker.scale.set(s1, s1, 1);
       this.apLabel.textContent = '';
@@ -1256,7 +1328,7 @@ export class FlightScene implements GameScene {
         this.apMarker.position
           .copy(el.pHat)
           .multiplyScalar(-el.apR * MAP_SCALE)
-          .addScaledVector(vOff, MAP_SCALE);
+          .addScaledVector(anchor, MAP_SCALE);
         const s2 = this.apMarker.position.distanceTo(this.mapCamera.position) * 0.008;
         this.apMarker.scale.set(s2, s2, 1);
         this.apLabel.textContent = `Ap ${fmtDist(el.apR - R)}`;
@@ -1284,7 +1356,7 @@ export class FlightScene implements GameScene {
     const hint = `<div class="map-hint">click labels to focus · H = your ship</div>`;
     if (el && !el.degenerate) {
       $('map-info').innerHTML = `${focusRow}
-        <div class="srow"><span>Orbiting</span><b>${v.body.name}</b></div>
+        <div class="srow"><span>Orbiting</span><b>${(target ?? v).body.name}</b></div>
         <div class="srow"><span>Eccentricity</span><b>${el.e.toFixed(3)}</b></div>
         <div class="srow"><span>Inclination</span><b>${THREE.MathUtils.radToDeg(el.inc).toFixed(1)}°</b></div>
         <div class="srow"><span>Period</span><b>${fmtTime(el.period)}</b></div>

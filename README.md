@@ -74,8 +74,11 @@ the flight pause menu link back to the Space Center.
 
 Click any label in the map — bodies or vessels — to move the camera focus
 there; press **H** to snap back to your own ship. Focusing another vessel
-offers **TAKE CONTROL** to switch flights without leaving the map. Labels
-now stack instead of overlapping when targets crowd together.
+draws its orbit (cyan) and shows **its** apoapsis/periapsis markers — the
+Ap/Pe markers always describe the selected item (your own ship by
+default); focusing a body highlights its orbit line. Focusing another
+vessel offers **TAKE CONTROL** to switch flights without leaving the map.
+Labels stack instead of overlapping when targets crowd together.
 
 ### Multiple flights
 
