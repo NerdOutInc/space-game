@@ -133,6 +133,9 @@ export class VABScene implements GameScene {
       for (const id of ['pause-revert', 'pause-recover', 'pause-tovab', 'pause-terminate']) {
         $(id).style.display = 'none';
       }
+      $('pause-sc').style.display = '';
+      $('pause-sc').textContent = 'Space Center';
+      $('pause-sc').onclick = () => this.host.toSpaceCenter();
     }
   }
 
@@ -189,6 +192,7 @@ export class VABScene implements GameScene {
     $('launch-btn').addEventListener('click', () => {
       if (this.canLaunch()) this.host.launchVessel(this.stack.map((c) => ({ ...c })));
     });
+    $('vab-back').addEventListener('click', () => this.host.toSpaceCenter());
   }
 
   private canLaunch(): boolean {

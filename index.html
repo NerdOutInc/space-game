@@ -29,17 +29,35 @@
       </div>
     </div>
 
+    <!-- ============ SPACE CENTER (hub) ============ -->
+    <div id="sc-ui" class="ui hidden">
+      <div class="vab-title">ZENITH SPACE CENTER<br /><span id="sc-info">UT 0:00</span></div>
+      <div id="sc-buttons" class="panel">
+        <button class="btn sc-btn" id="sc-vab">🏗&nbsp; VEHICLE ASSEMBLY</button>
+        <button class="btn sc-btn" id="sc-track">📡&nbsp; TRACKING STATION</button>
+      </div>
+      <div id="tracking-panel" class="panel hidden">
+        <h3>Tracking Station <button class="btn mini-close" id="tracking-close">✕</button></h3>
+        <div id="tracking-list"></div>
+      </div>
+      <div class="vab-help panel">
+        The hub of the program. Build rockets in the VAB, or take over any
+        flight from the Tracking Station. Drag to look around. <b>Esc</b> pauses.
+      </div>
+    </div>
+
     <!-- ============ VAB (builder) ============ -->
     <div id="vab-ui" class="ui hidden">
       <div class="vab-title">VEHICLE ASSEMBLY<br /><span>Zenith Space Program</span></div>
       <div id="part-palette" class="panel">
         <h3>Parts</h3>
-        <div id="palette-list"></div>
         <div class="palette-actions">
-          <button id="sample-btn" class="btn">Load sample rocket</button>
-          <button id="clear-btn" class="btn danger">Clear stack</button>
+          <button id="sample-btn" class="btn">★ Load sample rocket</button>
+          <button id="clear-btn" class="btn danger">Clear</button>
         </div>
+        <div id="palette-list"></div>
       </div>
+      <button id="vab-back" class="btn">← SPACE CENTER</button>
       <div id="stack-panel" class="panel">
         <h3>Stack <span class="hint">top → bottom</span></h3>
         <div id="stack-list"></div>
@@ -146,6 +164,7 @@
           <button class="btn" id="pause-resume">Resume</button>
           <button class="btn" id="pause-revert">Revert to launch</button>
           <button class="btn" id="pause-recover">Recover vessel</button>
+          <button class="btn" id="pause-sc">Space Center (flight continues)</button>
           <button class="btn" id="pause-tovab">Return to VAB (flight continues)</button>
           <button class="btn danger" id="pause-terminate">Terminate flight</button>
         </div>

@@ -103,12 +103,12 @@ export class MenuScene implements GameScene {
       $('menu-start').addEventListener('click', () => {
         AUDIO.unlock();
         STATE.reset('science');
-        this.host.toVAB();
+        this.host.toSpaceCenter();
       });
       $('menu-free').addEventListener('click', () => {
         AUDIO.unlock();
         STATE.reset('freedom');
-        this.host.toVAB();
+        this.host.toSpaceCenter();
       });
       AUDIO.bindSliders('vol-music', 'vol-sfx');
     }
@@ -141,7 +141,7 @@ export class MenuScene implements GameScene {
       load.textContent = 'LOAD';
       load.addEventListener('click', () => {
         AUDIO.unlock();
-        if (STATE.loadSlot(slot.id)) this.host.toVAB();
+        if (STATE.loadSlot(slot.id)) this.host.toSpaceCenter();
       });
       row.appendChild(load);
       const del = document.createElement('button');

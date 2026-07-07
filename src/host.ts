@@ -13,6 +13,8 @@ export interface GameScene {
 export interface GameHost {
   renderer: THREE.WebGLRenderer;
   keys: Set<string>;
+  /** The space center hub: launch pad, VAB, tracking station. */
+  toSpaceCenter(): void;
   toVAB(): void;
   /** Build a new vessel from a craft design, add it to the world, and fly it. */
   launchVessel(craft: CraftPart[]): void;

@@ -230,7 +230,20 @@ body {
 .palette-actions {
   display: flex;
   gap: 6px;
-  margin-top: 10px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+#part-palette {
+  display: flex;
+  flex-direction: column;
+}
+#part-palette > h3 {
+  flex-shrink: 0;
+}
+#palette-list {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 .palette-actions .btn {
   flex: 1;
@@ -503,6 +516,67 @@ body {
   text-shadow: 0 0 6px #000;
   transform: translate(8px, -50%);
   white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.map-label:hover {
+  color: var(--accent);
+}
+.map-hint {
+  margin-top: 8px;
+  font-size: 9px;
+  color: #7b8794;
+  letter-spacing: 0.06em;
+}
+.take-btn {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* ============ SPACE CENTER ============ */
+
+#sc-buttons {
+  position: absolute;
+  left: 18px;
+  top: 110px;
+  width: 250px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sc-btn {
+  font-size: 13px;
+  padding: 13px 12px;
+  text-align: left;
+  letter-spacing: 0.12em;
+}
+#tracking-panel {
+  position: absolute;
+  right: 18px;
+  top: 110px;
+  width: 320px;
+  max-height: 60%;
+  overflow-y: auto;
+}
+#tracking-panel.hidden {
+  display: none;
+}
+#tracking-panel h3 {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.mini-close {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+#vab-back {
+  position: absolute;
+  bottom: 26px;
+  left: 50%;
+  transform: translateX(calc(-50% - 220px));
+  padding: 14px 18px;
 }
 .map-label.marker-label {
   color: var(--accent);

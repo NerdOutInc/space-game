@@ -4,6 +4,7 @@ import { AUDIO } from './audio';
 import { GameHost, GameScene } from './host';
 import { FlightScene } from './scenes/flight';
 import { MenuScene } from './scenes/menu';
+import { SpaceCenterScene } from './scenes/spaceCenter';
 import { VABScene } from './scenes/vab';
 import { STATE } from './state';
 import { HOME } from './universe/bodies';
@@ -20,6 +21,7 @@ class Game implements GameHost {
   keys = new Set<string>();
   private scene: GameScene | null = null;
   private vab: VABScene;
+  private spaceCenter: SpaceCenterScene | null = null;
   private clock = new THREE.Clock();
 
   constructor() {
@@ -64,6 +66,11 @@ class Game implements GameHost {
     scene.onResize?.();
     scene.enter();
     STATE.save();
+  }
+
+  toSpaceCenter(): void {
+    this.spaceCenter ??= new SpaceCenterScene(this);
+    this.switchTo(this.spaceCenter);
   }
 
   toVAB(): void {

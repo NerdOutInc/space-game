@@ -26,6 +26,8 @@ const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _v4 = new THREE.Vector3();
 const _spin = new THREE.Vector3();
+const _f1 = new THREE.Vector3();
+const _f2 = new THREE.Vector3();
 
 interface Debris {
   group: THREE.Group;
@@ -90,6 +92,9 @@ export class FlightScene implements GameScene {
   private vesselMarker: THREE.Sprite;
   private vesselLabel: HTMLElement;
   private others: OtherVesselVis[] = [];
+  /** Every label this scene owns — re-attached on enter() because the
+   * previous scene's exit() clears the shared container. */
+  private allLabels: HTMLElement[] = [];
   private orbitLine: THREE.Line;
   private orbitGeo: THREE.BufferGeometry;
   private apMarker: THREE.Sprite;
@@ -98,6 +103,9 @@ export class FlightScene implements GameScene {
   private peLabel: HTMLElement;
 
   private mode: 'flight' | 'map' = 'flight';
+  /** What the map camera centers on: null = follow this vessel's body. */
+  private mapFocus: Body | Vessel | null = null;
+  private labelSlots: Array<{ x: number; y: number }> = [];
   private endShown = false;
   private static debugPhase = 0;
 
@@ -245,7 +253,9 @@ export class FlightScene implements GameScene {
       const label = document.createElement('div');
       label.className = 'map-label';
       label.textContent = body.name;
+      label.addEventListener('click', () => (this.mapFocus = body));
       labels.appendChild(label);
+      this.allLabels.push(label);
       this.mapBodies.set(body, { mesh, marker, orbit, label });
     }
 
@@ -256,7 +266,9 @@ export class FlightScene implements GameScene {
     this.vesselLabel = document.createElement('div');
     this.vesselLabel.className = 'map-label marker-label';
     this.vesselLabel.textContent = `● ${vessel.name}`;
+    this.vesselLabel.addEventListener('click', () => (this.mapFocus = null));
     labels.appendChild(this.vesselLabel);
+    this.allLabels.push(this.vesselLabel);
 
     // Other vessels in the world show up as gray markers in the map.
     for (const other of STATE.vessels) {
@@ -269,7 +281,9 @@ export class FlightScene implements GameScene {
       const label = document.createElement('div');
       label.className = 'map-label';
       label.textContent = other.name;
+      label.addEventListener('click', () => (this.mapFocus = other));
       labels.appendChild(label);
+      this.allLabels.push(label);
       this.others.push({ vessel: other, marker, label });
     }
 
@@ -300,6 +314,7 @@ export class FlightScene implements GameScene {
     this.peLabel.className = 'map-label marker-label';
     labels.appendChild(this.apLabel);
     labels.appendChild(this.peLabel);
+    this.allLabels.push(this.apLabel, this.peLabel);
 
     this.onResize();
   }
@@ -309,6 +324,9 @@ export class FlightScene implements GameScene {
   enter(): void {
     $('flight-ui').classList.remove('hidden');
     $('end-dialog').classList.add('hidden');
+    // re-attach our labels (a previous scene's exit clears the container)
+    const labelBox = $('map-labels');
+    for (const l of this.allLabels) labelBox.appendChild(l);
     const canvas = this.host.renderer.domElement;
     canvas.addEventListener('pointerdown', this.onPointerDown);
     window.addEventListener('pointermove', this.onPointerMove);
@@ -458,6 +476,12 @@ export class FlightScene implements GameScene {
         if (msg) this.toast(msg);
         break;
       }
+      case 'KeyH':
+        if (this.mode === 'map') {
+          this.mapFocus = null;
+          this.toast('Map focus: your ship');
+        }
+        break;
       case 'KeyR':
         this.host.revertVessel(this.vessel);
         break;
@@ -513,11 +537,13 @@ export class FlightScene implements GameScene {
     $('pause-ut').textContent = `UT ${fmtTime(STATE.t)} · ${this.vessel.name}`;
     $('pause-resume').onclick = () => this.setPaused(false);
     $('pause-revert').onclick = () => this.host.revertVessel(this.vessel);
+    $('pause-sc').onclick = () => this.host.toSpaceCenter();
     $('pause-tovab').onclick = () => this.host.toVAB();
     $('pause-terminate').onclick = () => this.host.removeVessel(this.vessel);
     $('pause-recover').onclick = () => this.host.recoverVessel(this.vessel);
     // Flight pause shows the full set (VAB pause hides these)
-    for (const id of ['pause-revert', 'pause-tovab', 'pause-terminate']) {
+    $('pause-sc').textContent = 'Space Center (flight continues)';
+    for (const id of ['pause-revert', 'pause-sc', 'pause-tovab', 'pause-terminate']) {
       $(id).style.display = '';
     }
     const v = this.vessel;
@@ -1087,10 +1113,36 @@ export class FlightScene implements GameScene {
 
   // ---------------- map-view sync ----------------
 
+  /** Where the map camera is centered (click labels to change, H = home). */
+  private resolveMapFocus(t: number, out: THREE.Vector3): void {
+    let f = this.mapFocus;
+    if (f instanceof Vessel && (f.destroyed || !STATE.vessels.includes(f))) {
+      this.mapFocus = null;
+      f = null;
+    }
+    if (f === null) {
+      this.vessel.body.worldPosition(t, out);
+    } else if (f instanceof Vessel) {
+      f.body.worldPosition(t, out);
+      if (f.landed) {
+        _f2.copy(f.landedDir)
+          .applyAxisAngle(_f1.set(0, 1, 0), f.body.rotationAngle(t))
+          .multiplyScalar(f.body.radius);
+        out.add(_f2);
+      } else {
+        out.add(f.pos);
+      }
+    } else {
+      f.worldPosition(t, out);
+    }
+  }
+
   private syncMap(): void {
     const v = this.vessel;
     const t = this.sim.t;
-    const focus = v.body.worldPosition(t, _v1); // map origin
+    this.labelSlots.length = 0;
+    const focus = _v1; // map origin
+    this.resolveMapFocus(t, focus);
 
     // Camera first so labels can project correctly
     const cp = Math.cos(this.mapPitch);
@@ -1125,29 +1177,32 @@ export class FlightScene implements GameScene {
       updateAtmosphereSun(mat, _v2, this.mapCamera);
     }
 
-    // Vessel marker + orbit
-    _v2.copy(v.pos).multiplyScalar(MAP_SCALE);
+    // Vessel marker + orbit (positions are relative to the focus point)
+    const vOff = v.body.worldPosition(t, _f1).sub(focus); // stays in _f1
+    _v2.copy(vOff).add(v.pos).multiplyScalar(MAP_SCALE);
     this.vesselMarker.position.copy(_v2);
     const dm = _v2.distanceTo(this.mapCamera.position);
     const vs = dm * 0.01;
     this.vesselMarker.scale.set(vs, vs, 1);
     this.placeLabel(this.vesselLabel, this.vesselMarker.position);
 
-    // Other vessels sharing this SOI
+    // Every other vessel in the system, wherever it is
     for (const o of this.others) {
       const ov = o.vessel;
       const inWorld = STATE.vessels.includes(ov);
-      if (!inWorld || ov.destroyed || ov.body !== v.body) {
+      if (!inWorld || ov.destroyed) {
         o.marker.visible = false;
         o.label.style.display = 'none';
         continue;
       }
+      ov.body.worldPosition(t, _v3).sub(focus);
       if (ov.landed) {
-        _v3.copy(ov.landedDir)
-          .applyAxisAngle(_v4.set(0, 1, 0), ov.body.rotationAngle(t))
+        _v4.copy(ov.landedDir)
+          .applyAxisAngle(_v2.set(0, 1, 0), ov.body.rotationAngle(t))
           .multiplyScalar(ov.body.radius);
+        _v3.add(_v4);
       } else {
-        _v3.copy(ov.pos);
+        _v3.add(ov.pos);
       }
       o.marker.visible = true;
       o.marker.position.copy(_v3).multiplyScalar(MAP_SCALE);
@@ -1175,13 +1230,22 @@ export class FlightScene implements GameScene {
     } else {
       this.orbitLine.visible = false;
     }
+    // orbit geometry is body-centered — shift it by the focus offset
+    this.orbitLine.position.set(
+      vOff.x * MAP_SCALE,
+      vOff.y * MAP_SCALE,
+      vOff.z * MAP_SCALE,
+    );
 
     // Ap / Pe markers
     const el = v.landed ? null : orbitalElements(v.pos, v.vel, v.body.mu);
     const R = v.body.radius;
     if (el && !el.degenerate && el.peR > 0) {
       this.peMarker.visible = true;
-      this.peMarker.position.copy(el.pHat).multiplyScalar(el.peR * MAP_SCALE);
+      this.peMarker.position
+        .copy(el.pHat)
+        .multiplyScalar(el.peR * MAP_SCALE)
+        .addScaledVector(vOff, MAP_SCALE);
       const s1 = this.peMarker.position.distanceTo(this.mapCamera.position) * 0.008;
       this.peMarker.scale.set(s1, s1, 1);
       this.apLabel.textContent = '';
@@ -1189,7 +1253,10 @@ export class FlightScene implements GameScene {
       this.placeLabel(this.peLabel, this.peMarker.position);
       if (el.e < 1 && isFinite(el.apR)) {
         this.apMarker.visible = true;
-        this.apMarker.position.copy(el.pHat).multiplyScalar(-el.apR * MAP_SCALE);
+        this.apMarker.position
+          .copy(el.pHat)
+          .multiplyScalar(-el.apR * MAP_SCALE)
+          .addScaledVector(vOff, MAP_SCALE);
         const s2 = this.apMarker.position.distanceTo(this.mapCamera.position) * 0.008;
         this.apMarker.scale.set(s2, s2, 1);
         this.apLabel.textContent = `Ap ${fmtDist(el.apR - R)}`;
@@ -1206,17 +1273,31 @@ export class FlightScene implements GameScene {
     }
 
     // Info panel
+    const f = this.mapFocus;
+    const focusName =
+      f === null ? `${v.name} (you)` : f instanceof Vessel ? f.name : f.name;
+    const focusRow = `<div class="srow"><span>Focus</span><b>${focusName}</b></div>`;
+    const takeBtn =
+      f instanceof Vessel && f !== v && !f.destroyed
+        ? `<button class="btn take-btn" id="btn-take">🎮 TAKE CONTROL</button>`
+        : '';
+    const hint = `<div class="map-hint">click labels to focus · H = your ship</div>`;
     if (el && !el.degenerate) {
-      $('map-info').innerHTML = `
+      $('map-info').innerHTML = `${focusRow}
         <div class="srow"><span>Orbiting</span><b>${v.body.name}</b></div>
         <div class="srow"><span>Eccentricity</span><b>${el.e.toFixed(3)}</b></div>
         <div class="srow"><span>Inclination</span><b>${THREE.MathUtils.radToDeg(el.inc).toFixed(1)}°</b></div>
         <div class="srow"><span>Period</span><b>${fmtTime(el.period)}</b></div>
         <div class="srow"><span>Apoapsis</span><b>${el.e < 1 ? fmtDist(el.apR - R) : '—'}</b></div>
-        <div class="srow"><span>Periapsis</span><b>${fmtDist(el.peR - R)}</b></div>`;
+        <div class="srow"><span>Periapsis</span><b>${fmtDist(el.peR - R)}</b></div>${takeBtn}${hint}`;
     } else {
-      $('map-info').innerHTML = `<div class="srow"><span>Orbiting</span><b>${v.body.name}</b></div>
-        <div class="srow"><span>Status</span><b>${v.landed ? 'landed' : 'suborbital'}</b></div>`;
+      $('map-info').innerHTML = `${focusRow}
+        <div class="srow"><span>Orbiting</span><b>${v.body.name}</b></div>
+        <div class="srow"><span>Status</span><b>${v.landed ? 'landed' : 'suborbital'}</b></div>${takeBtn}${hint}`;
+    }
+    if (takeBtn) {
+      const target = f as Vessel;
+      $('btn-take').onclick = () => this.host.flyVessel(target);
     }
   }
 
@@ -1227,8 +1308,19 @@ export class FlightScene implements GameScene {
       return;
     }
     label.style.display = 'block';
-    label.style.left = `${(_v4.x * 0.5 + 0.5) * window.innerWidth}px`;
-    label.style.top = `${(-_v4.y * 0.5 + 0.5) * window.innerHeight}px`;
+    const x = (_v4.x * 0.5 + 0.5) * window.innerWidth;
+    let y = (-_v4.y * 0.5 + 0.5) * window.innerHeight;
+    // declutter: stack labels downward instead of overlapping
+    for (let guard = 0; guard < 8; guard++) {
+      const hit = this.labelSlots.some(
+        (s) => Math.abs(s.x - x) < 90 && Math.abs(s.y - y) < 13,
+      );
+      if (!hit) break;
+      y += 13;
+    }
+    this.labelSlots.push({ x, y });
+    label.style.left = `${x}px`;
+    label.style.top = `${y}px`;
   }
 
   // ---------------- HUD ----------------

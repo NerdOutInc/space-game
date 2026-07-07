@@ -62,6 +62,21 @@ horizon: blue is sky, brown is ground, letters are compass headings
 (launch east — `HDG 090°`). The yellow wings are your nose; ○ is prograde,
 ⊗ is retrograde. HDG/PIT readouts sit above the ball.
 
+### The Space Center
+
+Loading a game lands you at the **Zenith Space Center** on the launch
+plateau — the VAB building, the tracking station dish, the pad, all under
+the real time-of-day sky. From here enter the **Vehicle Assembly** or the
+**Tracking Station** (every flight, with FLY buttons). Both the VAB and
+the flight pause menu link back to the Space Center.
+
+### Map view navigation
+
+Click any label in the map — bodies or vessels — to move the camera focus
+there; press **H** to snap back to your own ship. Focusing another vessel
+offers **TAKE CONTROL** to switch flights without leaving the map. Labels
+now stack instead of overlapping when targets crowd together.
+
 ### Multiple flights
 
 Leaving a flight (Esc → *Return to VAB*) keeps the vessel on rails: it
