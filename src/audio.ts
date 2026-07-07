@@ -15,6 +15,13 @@ const TRACKS: Record<string, string> = {
 
 const FADE = 1.2; // s, music crossfade
 
+// The engine recording is ~11.1 s: ignition attack, ~7 s of steady burn,
+// then a baked-in fade-out. Loop only the steady section; play the natural
+// fade once when the engine cuts off.
+const ENGINE_LOOP_START = 0.8; // s, past the ignition attack
+const ENGINE_LOOP_END = 6.5; // s, safely before the fade begins
+const ENGINE_TAIL_START = 7.0; // s, start of the baked-in fade-out
+
 class AudioManager {
   private ctx: AudioContext | null = null;
   private musicBus: GainNode | null = null;
@@ -25,6 +32,7 @@ class AudioManager {
     null;
   private wantMusic: string | null = null;
   private engine: { gain: GainNode; src: AudioBufferSourceNode } | null = null;
+  private engineTail: AudioBufferSourceNode | null = null;
   private engineLevel = 0;
 
   musicVolume = 0.3;
@@ -94,26 +102,69 @@ class AudioManager {
     this.music = { name, gain, src };
   }
 
-  /** 0..1 — engine loudness; 0 stops the loop (kept warm for restarts). */
+  /**
+   * 0..1 — engine loudness. Ignition plays the recording's attack and then
+   * loops the steady-burn section; dropping to 0 stops the loop and plays
+   * the recording's own fade-out tail once.
+   */
   setEngineLevel(level: number): void {
+    const wasOn = this.engineLevel > 0;
     this.engineLevel = level;
     if (!this.ctx || !this.sfxBus) return;
     const buf = this.buffers.get('engine');
     if (!buf) return;
-    if (!this.engine) {
-      if (level <= 0) return;
-      const gain = this.ctx.createGain();
-      gain.gain.value = 0;
-      gain.connect(this.sfxBus);
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
-      src.loop = true;
-      src.connect(gain);
-      src.start();
-      this.engine = { gain, src };
-    }
     const t = this.ctx.currentTime;
-    this.engine.gain.gain.setTargetAtTime(Math.max(0, Math.min(1, level)), t, 0.08);
+
+    if (level > 0) {
+      if (this.engineTail) {
+        // re-ignited during the shutdown tail
+        try {
+          this.engineTail.stop();
+        } catch {
+          /* already ended */
+        }
+        this.engineTail = null;
+      }
+      if (!this.engine) {
+        const gain = this.ctx.createGain();
+        gain.gain.value = 0;
+        gain.connect(this.sfxBus);
+        const src = this.ctx.createBufferSource();
+        src.buffer = buf;
+        src.loop = true;
+        src.loopStart = ENGINE_LOOP_START;
+        src.loopEnd = Math.min(ENGINE_LOOP_END, buf.duration);
+        src.connect(gain);
+        src.start(t, 0); // from 0 so the ignition attack plays once
+        this.engine = { gain, src };
+      }
+      this.engine.gain.gain.setTargetAtTime(Math.min(1, level), t, 0.08);
+      return;
+    }
+
+    if (wasOn && this.engine) {
+      // Shutdown: swap the loop for the natural fade-out at current volume.
+      const { gain, src } = this.engine;
+      this.engine = null;
+      try {
+        src.stop();
+      } catch {
+        /* already stopped */
+      }
+      if (ENGINE_TAIL_START < buf.duration) {
+        const tail = this.ctx.createBufferSource();
+        tail.buffer = buf;
+        tail.connect(gain);
+        tail.start(t, ENGINE_TAIL_START);
+        tail.onended = () => {
+          if (this.engineTail === tail) this.engineTail = null;
+          gain.disconnect();
+        };
+        this.engineTail = tail;
+      } else {
+        gain.disconnect();
+      }
+    }
   }
 
   setMusicVolume(v: number): void {
