@@ -9,10 +9,10 @@ import { makeBodyTexture, makeDotTexture, makeStarfield } from '../render/textur
 import { Controls, Simulation } from '../sim/simulation';
 import { STATE } from '../state';
 import { BODIES, Body, HELIOS, HOME } from '../universe/bodies';
-import { displacePlanetGeometry, groundHeight } from '../universe/terrain';
+import { displacePlanetGeometry, groundHeight, PAD_DIR } from '../universe/terrain';
 import { $, fmtDist, fmtSpeed, fmtTime } from '../util/format';
 import { showToast } from '../util/toast';
-import { Vessel } from '../vessel/vessel';
+import { BoosterInstance, Vessel } from '../vessel/vessel';
 import { makeAtmosphereMaterial } from '../render/atmosphere';
 
 const MAP_SCALE = 1e-6; // meters → map units
@@ -62,7 +62,9 @@ export class FlightScene implements GameScene {
   private sunLight: THREE.DirectionalLight;
   private rocketHolder = new THREE.Group();
   private flame: THREE.Mesh;
+  private boosterFlames: THREE.Mesh[] = [];
   private rocketHeight = 0;
+  private lastChutes = 0;
   private pad: THREE.Mesh;
   private debris: Debris[] = [];
 
@@ -128,6 +130,22 @@ export class FlightScene implements GameScene {
             metalness: 0,
           }),
         );
+        if (body.terrain?.ocean) {
+          // Translucent water surface at the datum; the displaced seabed
+          // below shows through, so depth reads naturally near coasts.
+          const water = new THREE.Mesh(
+            new THREE.SphereGeometry(body.radius + 2, 128, 64),
+            new THREE.MeshStandardMaterial({
+              color: new THREE.Color(body.color).multiplyScalar(0.85),
+              transparent: true,
+              opacity: 0.62,
+              roughness: 0.12,
+              metalness: 0.05,
+              depthWrite: false,
+            }),
+          );
+          mesh.add(water);
+        }
         addAtmosphereShell(mesh, body);
       }
       this.bodyMeshes.set(body, mesh);
@@ -324,6 +342,7 @@ export class FlightScene implements GameScene {
     $('map-labels').innerHTML = '';
     $('pause-menu').classList.add('hidden');
     AUDIO.setEngineLevel(0);
+    AUDIO.setChuteLevel(0);
     this.navball.dispose();
     // This scene is per-flight: free GPU resources when leaving it.
     for (const scene of [this.scene, this.mapScene]) {
@@ -462,6 +481,7 @@ export class FlightScene implements GameScene {
     $('pause-menu').classList.toggle('hidden', !p);
     if (!p) return;
     AUDIO.setEngineLevel(0);
+    AUDIO.setChuteLevel(0);
     AUDIO.syncSliders('pv-music', 'pv-sfx');
     $('pause-ut').textContent = `UT ${fmtTime(STATE.t)} · ${this.vessel.name}`;
     $('pause-resume').onclick = () => this.setPaused(false);
@@ -502,10 +522,9 @@ export class FlightScene implements GameScene {
     this.sim.warp = 1;
     const res = this.vessel.stage();
     this.toast(res.msg);
-    if (res.dropped) {
-      this.spawnDebris(res.dropped);
-      this.rebuildRocket();
-    }
+    if (res.dropped) this.spawnDebris(res.dropped);
+    if (res.droppedBoosters) this.spawnBoosterDebris(res.droppedBoosters);
+    if (res.dropped || res.droppedBoosters) this.rebuildRocket();
   }
 
   private warp(dir: 1 | -1): void {
@@ -536,6 +555,22 @@ export class FlightScene implements GameScene {
     }
   }
 
+  /** Jettisoned side boosters tumble away sideways. */
+  private spawnBoosterDebris(bs: BoosterInstance[]): void {
+    bs.forEach((b, i) => {
+      const { group } = buildRocketVisual([b]);
+      this.scene.add(group);
+      const side = _v2
+        .set(i % 2 === 0 ? 1 : -1, 0, i >= 2 ? 1 : -1)
+        .normalize()
+        .applyQuaternion(this.vessel.q);
+      const pos = this.vessel.pos.clone().addScaledVector(side, 2);
+      const vel = this.vessel.vel.clone().addScaledVector(side, 6);
+      group.quaternion.copy(this.vessel.q);
+      this.debris.push({ group, body: this.vessel.body, pos, vel, age: 0 });
+    });
+  }
+
   private spawnDebris(parts: Vessel['parts']): void {
     const { group } = buildRocketVisual(parts);
     this.scene.add(group);
@@ -551,11 +586,24 @@ export class FlightScene implements GameScene {
 
   private rebuildRocket(): void {
     this.rocketHolder.clear();
-    const { group, height } = buildRocketVisual(this.vessel.parts);
+    const { group, height, boosterMounts } = buildRocketVisual(
+      this.vessel.parts,
+      this.vessel.boosters,
+    );
     this.rocketHeight = height;
     this.rocketHolder.add(group);
     this.flame.position.y = -height / 2;
     this.rocketHolder.add(this.flame);
+    // one flame per side booster
+    this.boosterFlames = [];
+    for (const m of boosterMounts) {
+      const f = buildFlame();
+      f.scale.set(0.8, 0.8, 0.8);
+      f.position.set(m.x, m.y, m.z);
+      f.visible = false;
+      this.rocketHolder.add(f);
+      this.boosterFlames.push(f);
+    }
   }
 
   // ---------------- per-frame ----------------
@@ -602,8 +650,19 @@ export class FlightScene implements GameScene {
 
     // Autopilot staging happens inside the sim — pick up the wreckage.
     const dropped = this.sim.dropped.splice(0);
-    if (dropped.length > 0) {
+    const droppedBoosters = this.sim.droppedBoosters.splice(0);
+    if (dropped.length > 0 || droppedBoosters.length > 0) {
       for (const parts of dropped) this.spawnDebris(parts);
+      for (const bs of droppedBoosters) this.spawnBoosterDebris(bs);
+      this.rebuildRocket();
+    }
+
+    // Parachute events: opening snap + rebuild for the canopy (covers both
+    // manual deploys and armed chutes popped by the sim).
+    const chutes = v.deployedChutes();
+    if (chutes !== this.lastChutes) {
+      if (chutes > this.lastChutes) AUDIO.playOneShot('chuteOpen', 0.9);
+      this.lastChutes = chutes;
       this.rebuildRocket();
     }
 
@@ -618,15 +677,23 @@ export class FlightScene implements GameScene {
       $('end-dialog').classList.remove('hidden');
     }
 
-    // Engine audio follows thrust (also audible in map view)
+    // Engine + parachute audio follow the physics (also audible in map view)
     {
       const alt = v.pos.length() - v.body.radius;
+      const atmo = v.body.atmosphere;
       const pr =
-        v.body.atmosphere && alt < v.body.atmosphere.height
-          ? Math.exp(-Math.max(0, alt) / v.body.atmosphere.scaleHeight)
+        atmo && alt < atmo.height
+          ? Math.exp(-Math.max(0, alt) / atmo.scaleHeight)
           : 0;
       const thrust = v.destroyed ? 0 : v.totalThrust(pr);
       AUDIO.setEngineLevel(thrust > 0 ? 0.35 + 0.65 * Math.min(1, thrust / 215_000) : 0);
+      let chuteLevel = 0;
+      if (chutes > 0 && pr > 0.004 && !v.landed && !v.destroyed) {
+        _spin.set(0, v.body.spinRate, 0);
+        const va = _v1.crossVectors(_spin, v.pos).sub(v.vel).length();
+        chuteLevel = Math.min(0.85, 0.15 + va / 120) * Math.min(1, pr * 4);
+      }
+      AUDIO.setChuteLevel(chuteLevel);
     }
 
     if (this.mode === 'flight') {
@@ -726,17 +793,30 @@ export class FlightScene implements GameScene {
     if (v.body.atmosphere && alt < v.body.atmosphere.height) {
       pr = Math.exp(-Math.max(0, alt) / v.body.atmosphere.scaleHeight);
     }
-    const thrust = v.destroyed ? 0 : v.totalThrust(pr);
-    this.flame.visible = thrust > 0;
-    if (thrust > 0) {
+    const firing = v.destroyed ? [] : v.firingEngines(pr);
+    const coreThrust = firing.some((f) => !('hostIndex' in f.part));
+    this.flame.visible = coreThrust;
+    if (coreThrust) {
       const s = 0.75 + 0.5 * Math.random() * 0.3 + v.throttle * 0.6;
       this.flame.scale.set(1, s, 1);
     }
+    // booster flames track their instance (visual order matches vessel.boosters)
+    for (let i = 0; i < this.boosterFlames.length; i++) {
+      const b = v.boosters[i];
+      const on = !!b && b.ignited && b.fuel > 0 && !v.destroyed;
+      this.boosterFlames[i].visible = on;
+      if (on) {
+        this.boosterFlames[i].scale.set(0.8, 0.7 + Math.random() * 0.25, 0.8);
+      }
+    }
 
-    // Launch pad (fixed to the home planet's surface)
+    // Launch pad (fixed to the home planet's surface, on its plateau)
     const theta = HOME.rotationAngle(t);
-    _v3.set(-1, 0, 0).applyAxisAngle(_v4.set(0, 1, 0), theta);
-    const padWorld = HOME.worldPosition(t, _v2).addScaledVector(_v3, HOME.radius + 0.3);
+    _v3.copy(PAD_DIR).applyAxisAngle(_v4.set(0, 1, 0), theta);
+    const padWorld = HOME.worldPosition(t, _v2).addScaledVector(
+      _v3,
+      HOME.radius + groundHeight(HOME, PAD_DIR) + 0.3,
+    );
     this.pad.position.copy(padWorld.sub(vw));
     this.pad.quaternion.setFromUnitVectors(_v4.set(0, 1, 0), _v3);
     this.pad.visible = this.pad.position.length() < 30_000;
@@ -975,6 +1055,7 @@ export class FlightScene implements GameScene {
     $('sas-ind').classList.toggle('on', v.sas);
     $('ap-ind').classList.toggle('on', this.sim.autopilot.active);
     $('stage-ind').textContent = `STAGE ${v.stageCount()}`;
+    $('next-ind').textContent = `␣ ${v.nextStageLabel()}`;
     const up = _v1.set(0, 1, 0).applyQuaternion(v.q);
     const radial = _v2.copy(v.pos).normalize();
     const tilt = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(up.dot(radial), -1, 1)));

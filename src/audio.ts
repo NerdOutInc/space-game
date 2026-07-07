@@ -9,6 +9,8 @@ const audioPath = (file: string): string => `${import.meta.env.BASE_URL}audio/${
 
 const TRACKS: Record<string, string> = {
   engine: audioPath('rocket-engine.mp3'),
+  chuteOpen: audioPath('chute-open.mp3'),
+  chuteLoop: audioPath('chute-loop.mp3'),
   dunes: audioPath('dunes.mp3'),
   cosmic: audioPath('cosmic-glow.mp3'),
 };
@@ -34,6 +36,8 @@ class AudioManager {
   private engine: { gain: GainNode; src: AudioBufferSourceNode } | null = null;
   private engineTail: AudioBufferSourceNode | null = null;
   private engineLevel = 0;
+  private chute: { gain: GainNode; src: AudioBufferSourceNode } | null = null;
+  private chuteLevel = 0;
 
   musicVolume = 0.3;
   sfxVolume = 0.7;
@@ -70,6 +74,7 @@ class AudioManager {
       this.buffers.set(name, buf);
       if (this.wantMusic === name) this.playMusic(name);
       if (name === 'engine' && this.engineLevel > 0) this.setEngineLevel(this.engineLevel);
+      if (name === 'chuteLoop' && this.chuteLevel > 0) this.setChuteLevel(this.chuteLevel);
     } finally {
       this.loading.delete(name);
     }
@@ -164,6 +169,52 @@ class AudioManager {
       } else {
         gain.disconnect();
       }
+    }
+  }
+
+  /** Fire-and-forget sound effect (e.g. the parachute opening snap). */
+  playOneShot(name: string, volume = 1): void {
+    if (!this.ctx || !this.sfxBus) return;
+    const buf = this.buffers.get(name);
+    if (!buf) return;
+    const gain = this.ctx.createGain();
+    gain.gain.value = Math.max(0, Math.min(1, volume));
+    gain.connect(this.sfxBus);
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(gain);
+    src.onended = () => gain.disconnect();
+    src.start();
+  }
+
+  /** 0..1 — fabric-in-wind loop while a parachute is deployed in atmosphere. */
+  setChuteLevel(level: number): void {
+    this.chuteLevel = level;
+    if (!this.ctx || !this.sfxBus) return;
+    const buf = this.buffers.get('chuteLoop');
+    if (!buf) return;
+    const t = this.ctx.currentTime;
+    if (level > 0) {
+      if (!this.chute) {
+        const gain = this.ctx.createGain();
+        gain.gain.value = 0;
+        gain.connect(this.sfxBus);
+        const src = this.ctx.createBufferSource();
+        src.buffer = buf;
+        src.loop = true;
+        // trim the loop edges slightly to hide any hard cut in the recording
+        src.loopStart = 0.15;
+        src.loopEnd = Math.max(0.5, buf.duration - 0.15);
+        src.connect(gain);
+        src.start(t, 0.15);
+        this.chute = { gain, src };
+      }
+      this.chute.gain.gain.setTargetAtTime(Math.min(1, level), t, 0.15);
+    } else if (this.chute) {
+      const { gain, src } = this.chute;
+      this.chute = null;
+      gain.gain.setTargetAtTime(0, t, 0.2);
+      src.stop(t + 1);
     }
   }
 

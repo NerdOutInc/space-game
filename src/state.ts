@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { propagateKepler } from './math/kepler';
-import { BODIES, Body, HOME } from './universe/bodies';
-import { PartDef, PART_BY_ID } from './vessel/parts';
+import { BODIES, HOME } from './universe/bodies';
+import { BOOSTER_DEF_ID, PartDef, PART_BY_ID } from './vessel/parts';
 import { Vessel } from './vessel/vessel';
 
 const _p = new THREE.Vector3();
@@ -33,6 +33,13 @@ interface SavedPart {
   fuel: number;
   ignited: boolean;
   deployed: boolean;
+  armed?: boolean;
+}
+
+interface SavedBooster {
+  hostIndex: number;
+  fuel: number;
+  ignited: boolean;
 }
 
 interface SavedVessel {
@@ -47,12 +54,15 @@ interface SavedVessel {
   reachedSpace: boolean;
   launchedAt: number | null;
   throttle: number;
-  defs: string[];
+  craft: Array<{ id: string; boosters: number }>;
   parts: SavedPart[];
+  boosters: SavedBooster[];
+  /** v1 saves stored the craft as a flat list of part ids. */
+  defs?: string[];
 }
 
 interface SaveData {
-  version: 1;
+  version: 1 | 2;
   t: number;
   counter: number;
   science: number;
@@ -168,7 +178,7 @@ export class GameState {
   save(): void {
     if (this.wiped) return;
     const data: SaveData = {
-      version: 1,
+      version: 2,
       t: this.t,
       counter: this.counter,
       science: this.science,
@@ -186,12 +196,18 @@ export class GameState {
         reachedSpace: v.reachedSpace,
         launchedAt: v.launchedAt,
         throttle: v.throttle,
-        defs: v.defs.map((d) => d.id),
+        craft: v.craft.map((c) => ({ id: c.def.id, boosters: c.boosters })),
         parts: v.parts.map((p) => ({
           id: p.def.id,
           fuel: p.fuel,
           ignited: p.ignited,
           deployed: p.deployed,
+          armed: p.armed,
+        })),
+        boosters: v.boosters.map((b) => ({
+          hostIndex: b.hostIndex,
+          fuel: b.fuel,
+          ignited: b.ignited,
         })),
       })),
     };
@@ -208,18 +224,23 @@ export class GameState {
     if (!raw) return false;
     try {
       const data = JSON.parse(raw) as SaveData;
-      if (data.version !== 1) return false;
+      if (data.version !== 1 && data.version !== 2) return false;
       this.t = data.t;
       this.counter = data.counter;
       this.science = data.science;
       this.milestones = new Set(data.milestones);
       this.unlocked = new Set(data.unlocked);
       this.vessels = [];
+      const srb = PART_BY_ID[BOOSTER_DEF_ID];
       for (const sv of data.vessels) {
-        const defs = sv.defs.map((id) => PART_BY_ID[id]).filter(Boolean);
-        if (defs.length === 0) continue;
+        // v1 stored a flat part-id list; v2 stores craft slots with boosters
+        const craftIds = sv.craft ?? (sv.defs ?? []).map((id) => ({ id, boosters: 0 }));
+        const craft = craftIds
+          .filter((c) => PART_BY_ID[c.id])
+          .map((c) => ({ def: PART_BY_ID[c.id], boosters: c.boosters ?? 0 }));
+        if (craft.length === 0) continue;
         const body = BODIES.find((b) => b.name === sv.body) ?? HOME;
-        const v = new Vessel(defs, body);
+        const v = new Vessel(craft, body);
         v.name = sv.name;
         v.pos.fromArray(sv.pos);
         v.vel.fromArray(sv.vel);
@@ -237,7 +258,16 @@ export class GameState {
             fuel: p.fuel,
             ignited: p.ignited,
             deployed: p.deployed,
+            armed: p.armed ?? false,
           }));
+        v.boosters = (sv.boosters ?? []).map((b) => ({
+          def: srb,
+          fuel: b.fuel,
+          ignited: b.ignited,
+          deployed: false,
+          armed: false,
+          hostIndex: b.hostIndex,
+        }));
         this.vessels.push(v);
       }
       return true;

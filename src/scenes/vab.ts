@@ -5,18 +5,55 @@ import { buildRocketVisual } from '../render/rocketMesh';
 import { STATE } from '../state';
 import { $, fmtDist, fmtMass, fmtTime } from '../util/format';
 import { showToast } from '../util/toast';
-import { PartDef, PARTS, PART_BY_ID, SAMPLE_ROCKET, SAMPLE_STARTER } from '../vessel/parts';
-import { computeStageStats } from '../vessel/vessel';
+import {
+  BOOSTER_DEF_ID,
+  canHostBoosters,
+  CraftPart,
+  PART_BY_ID,
+  PARTS,
+  PartDef,
+  SAMPLE_ROCKET,
+  SAMPLE_STARTER,
+} from '../vessel/parts';
+import { computeStageStats, describeStages } from '../vessel/vessel';
+
+const CATEGORIES: Array<{ label: string; types: string[] }> = [
+  { label: 'Command & Recovery', types: ['capsule', 'parachute'] },
+  { label: 'Propulsion', types: ['tank', 'engine', 'srb'] },
+  { label: 'Structural', types: ['decoupler'] },
+];
 
 export class VABScene implements GameScene {
   private host: GameHost;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
   private rocketHolder = new THREE.Group();
-  private stack: PartDef[] = [];
+  private stack: CraftPart[] = [];
   private bound = false;
   private paused = false;
   private missionTimer = 0;
+
+  // camera controls
+  private yaw = 0;
+  private zoom = 1;
+  private dragging = false;
+  private lastX = 0;
+  private autoSpin = true;
+  private onPointerDown = (e: PointerEvent) => {
+    this.dragging = true;
+    this.autoSpin = false;
+    this.lastX = e.clientX;
+  };
+  private onPointerMove = (e: PointerEvent) => {
+    if (!this.dragging) return;
+    this.yaw += (e.clientX - this.lastX) * 0.008;
+    this.lastX = e.clientX;
+  };
+  private onPointerUp = () => (this.dragging = false);
+  private onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    this.zoom = THREE.MathUtils.clamp(this.zoom * Math.pow(1.1, e.deltaY * 0.01), 0.4, 2.6);
+  };
 
   constructor(host: GameHost) {
     this.host = host;
@@ -55,6 +92,11 @@ export class VABScene implements GameScene {
       this.bind();
       this.bound = true;
     }
+    const canvas = this.host.renderer.domElement;
+    canvas.addEventListener('pointerdown', this.onPointerDown);
+    window.addEventListener('pointermove', this.onPointerMove);
+    window.addEventListener('pointerup', this.onPointerUp);
+    canvas.addEventListener('wheel', this.onWheel, { passive: false });
     this.paused = false;
     this.refresh();
     this.refreshMissions();
@@ -63,17 +105,27 @@ export class VABScene implements GameScene {
   exit(): void {
     $('vab-ui').classList.add('hidden');
     $('pause-menu').classList.add('hidden');
+    const canvas = this.host.renderer.domElement;
+    canvas.removeEventListener('pointerdown', this.onPointerDown);
+    window.removeEventListener('pointermove', this.onPointerMove);
+    window.removeEventListener('pointerup', this.onPointerUp);
+    canvas.removeEventListener('wheel', this.onWheel);
   }
 
   onKeyDown(e: KeyboardEvent): void {
     if (e.code === 'Escape') this.setPaused(!this.paused);
   }
 
+  onResize(): void {
+    this.camera.aspect = window.innerWidth / window.innerHeight;
+    this.camera.updateProjectionMatrix();
+  }
+
   private setPaused(p: boolean): void {
     this.paused = p;
     $('pause-menu').classList.toggle('hidden', !p);
     if (p) {
-      // VAB pause: only "resume" applies
+      AUDIO.syncSliders('pv-music', 'pv-sfx');
       $('pause-ut').textContent = `UT ${fmtTime(STATE.t)}`;
       $('pause-resume').onclick = () => this.setPaused(false);
       for (const id of ['pause-revert', 'pause-recover', 'pause-tovab', 'pause-terminate']) {
@@ -114,20 +166,17 @@ export class VABScene implements GameScene {
     }
   }
 
-  onResize(): void {
-    this.camera.aspect = window.innerWidth / window.innerHeight;
-    this.camera.updateProjectionMatrix();
-  }
-
   private bind(): void {
     $('sample-btn').addEventListener('click', () => {
       // Load the orbital sample once its parts are unlocked; the starter
       // hopper otherwise (it can reach space and come home for science).
       const orbitalOk = SAMPLE_ROCKET.every((id) => STATE.isUnlocked(PART_BY_ID[id]));
-      this.stack = (orbitalOk ? SAMPLE_ROCKET : SAMPLE_STARTER).map(
-        (id) => PART_BY_ID[id],
-      );
-      if (!orbitalOk) showToast('Starter hopper loaded — unlock more parts for the orbital rocket');
+      this.stack = (orbitalOk ? SAMPLE_ROCKET : SAMPLE_STARTER).map((id) => ({
+        def: PART_BY_ID[id],
+        boosters: 0,
+      }));
+      if (!orbitalOk)
+        showToast('Starter hopper loaded — unlock more parts for the orbital rocket');
       this.refresh();
     });
     $('clear-btn').addEventListener('click', () => {
@@ -135,50 +184,113 @@ export class VABScene implements GameScene {
       this.refresh();
     });
     $('launch-btn').addEventListener('click', () => {
-      if (this.canLaunch()) this.host.launchVessel([...this.stack]);
+      if (this.canLaunch()) this.host.launchVessel(this.stack.map((c) => ({ ...c })));
     });
   }
 
   private canLaunch(): boolean {
     return (
-      this.stack.some((d) => d.type === 'capsule') &&
-      this.stack.some((d) => d.type === 'engine' || d.type === 'srb')
+      this.stack.some((c) => c.def.type === 'capsule') &&
+      this.stack.some(
+        (c) => c.def.type === 'engine' || c.def.type === 'srb' || c.boosters > 0,
+      )
     );
   }
 
+  private addPart(def: PartDef): void {
+    this.stack.push({ def, boosters: 0 });
+    this.refresh();
+  }
+
   private refresh(): void {
-    // Parts palette (rebuilt so lock state stays current)
+    this.refreshPalette();
+    this.refreshStack();
+    this.refreshStats();
+
+    // 3D preview
+    this.rocketHolder.clear();
+    if (this.stack.length > 0) {
+      const boosters: Array<{ def: PartDef; hostIndex: number }> = [];
+      const srb = PART_BY_ID[BOOSTER_DEF_ID];
+      this.stack.forEach((c, i) => {
+        for (let k = 0; k < c.boosters; k++) boosters.push({ def: srb, hostIndex: i });
+      });
+      const { group, height: h } = buildRocketVisual(
+        this.stack.map((c) => ({ def: c.def })),
+        boosters,
+      );
+      group.position.y = h / 2;
+      this.rocketHolder.add(group);
+    }
+  }
+
+  private refreshPalette(): void {
     const palette = $('palette-list');
     palette.innerHTML = '';
-    for (const def of PARTS) {
-      const unlocked = STATE.isUnlocked(def);
-      const btn = document.createElement('button');
-      btn.className = 'part-btn' + (unlocked ? '' : ' locked');
-      const lockTag = unlocked ? '' : ` <span class="lock">🔒 ${def.cost} ✦</span>`;
-      btn.innerHTML = `<span class="pname">${def.name}${lockTag}</span><span class="pinfo">${def.info}</span>`;
-      btn.addEventListener('click', () => {
-        if (STATE.isUnlocked(def)) {
-          this.stack.push(def);
-        } else if (STATE.unlockPart(def)) {
-          showToast(`Unlocked ${def.name}!`);
-        } else {
-          showToast(`Need ${def.cost} ✦ science to unlock ${def.name}`);
-        }
-        this.refresh();
-      });
-      palette.appendChild(btn);
+    for (const cat of CATEGORIES) {
+      const header = document.createElement('div');
+      header.className = 'palette-cat';
+      header.textContent = cat.label;
+      palette.appendChild(header);
+      for (const def of PARTS.filter((p) => cat.types.includes(p.type))) {
+        const unlocked = STATE.isUnlocked(def);
+        const btn = document.createElement('button');
+        btn.className = 'part-btn' + (unlocked ? '' : ' locked');
+        const lockTag = unlocked ? '' : ` <span class="lock">🔒 ${def.cost} ✦</span>`;
+        btn.innerHTML = `<span class="pname">${def.name}${lockTag}</span><span class="pinfo">${def.info}</span>`;
+        btn.addEventListener('click', () => {
+          if (STATE.isUnlocked(def)) {
+            this.addPart(def);
+          } else if (STATE.unlockPart(def)) {
+            showToast(`Unlocked ${def.name}!`);
+            this.refresh();
+          } else {
+            showToast(`Need ${def.cost} ✦ science to unlock ${def.name}`);
+          }
+        });
+        palette.appendChild(btn);
+      }
     }
+  }
 
-    // Stack list
+  private refreshStack(): void {
     const list = $('stack-list');
     list.innerHTML = '';
     if (this.stack.length === 0) {
-      list.innerHTML = '<div class="stack-empty">No parts yet — click parts on the left, or load the sample rocket.</div>';
+      list.innerHTML =
+        '<div class="stack-empty">No parts yet — click parts on the left, or load the sample rocket.</div>';
     }
-    this.stack.forEach((def, i) => {
+    const srbDef = PART_BY_ID[BOOSTER_DEF_ID];
+    this.stack.forEach((c, i) => {
       const row = document.createElement('div');
       row.className = 'stack-item';
-      row.innerHTML = `<span>${def.name}</span><span class="x">✕</span>`;
+      const label = document.createElement('span');
+      label.innerHTML = c.def.name + (c.boosters ? ` <b class="bcount">+${c.boosters}◎</b>` : '');
+      row.appendChild(label);
+
+      const controls = document.createElement('span');
+      controls.className = 'stack-controls';
+      if (canHostBoosters(c.def)) {
+        const bBtn = document.createElement('button');
+        bBtn.className = 'mini-btn';
+        bBtn.textContent = '◎+';
+        bBtn.title = 'Attach radial side boosters (0 → 2 → 4)';
+        bBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!STATE.isUnlocked(srbDef)) {
+            showToast(`Side boosters need the ${srbDef.name} unlocked (${srbDef.cost} ✦)`);
+            return;
+          }
+          c.boosters = c.boosters >= 4 ? 0 : c.boosters + 2;
+          this.refresh();
+        });
+        controls.appendChild(bBtn);
+      }
+      const x = document.createElement('span');
+      x.className = 'x';
+      x.textContent = '✕';
+      controls.appendChild(x);
+      row.appendChild(controls);
       row.title = 'Click to remove';
       row.addEventListener('click', () => {
         this.stack.splice(i, 1);
@@ -186,14 +298,20 @@ export class VABScene implements GameScene {
       });
       list.appendChild(row);
     });
+  }
 
-    // Stats
+  private refreshStats(): void {
     const stats = $('vab-stats');
-    const mass = this.stack.reduce((s, d) => s + d.dryMass + (d.fuel ?? 0), 0);
-    const height = this.stack.reduce((s, d) => s + d.height, 0);
+    const srb = PART_BY_ID[BOOSTER_DEF_ID];
+    const mass = this.stack.reduce(
+      (s, c) =>
+        s + c.def.dryMass + (c.def.fuel ?? 0) + c.boosters * (srb.dryMass + (srb.fuel ?? 0)),
+      0,
+    );
+    const height = this.stack.reduce((s, c) => s + c.def.height, 0);
     let html = `
       <div class="srow"><span>Science</span><b>✦ ${STATE.science}</b></div>
-      <div class="srow"><span>Parts</span><b>${this.stack.length}</b></div>
+      <div class="srow"><span>Parts</span><b>${this.stack.length + this.stack.reduce((s, c) => s + c.boosters, 0)}</b></div>
       <div class="srow"><span>Height</span><b>${height.toFixed(1)} m</b></div>
       <div class="srow"><span>Mass</span><b>${fmtMass(mass)}</b></div>`;
     const stages = computeStageStats(this.stack).filter((s) => s.dv > 0 || s.twr > 0);
@@ -204,24 +322,24 @@ export class VABScene implements GameScene {
       html += `<div class="srow${twrWarn}"><span>Stage ${s.index} Δv / TWR</span><b>${s.dv.toFixed(0)} m/s · ${s.twr.toFixed(2)}</b></div>`;
     }
     html += `<div class="srow"><span>Total Δv (vac)</span><b>${total.toFixed(0)} m/s</b></div>`;
-    if (!this.stack.some((d) => d.type === 'capsule'))
+    if (!this.stack.some((c) => c.def.type === 'capsule'))
       html += `<div class="warn">⚠ needs a capsule</div>`;
-    if (!this.stack.some((d) => d.type === 'engine' || d.type === 'srb'))
-      html += `<div class="warn">⚠ needs an engine</div>`;
+    if (!this.canLaunch() && this.stack.length > 0)
+      html += `<div class="warn">⚠ needs an engine or boosters</div>`;
     const first = computeStageStats(this.stack)[0];
     if (first && first.twr > 0 && first.twr <= 1)
       html += `<div class="warn">⚠ first-stage TWR ≤ 1 — it won't lift off</div>`;
     stats.innerHTML = html;
 
-    ($('launch-btn') as HTMLButtonElement).disabled = !this.canLaunch();
+    // Stage sequence preview (what each Space press does in flight)
+    const seq = describeStages(this.stack);
+    $('vab-stages').innerHTML =
+      this.stack.length === 0 || seq.length === 0
+        ? ''
+        : `<h3>Stage sequence</h3>` +
+          seq.map((s, i) => `<div class="stage-step"><b>${i + 1}</b> ${s}</div>`).join('');
 
-    // 3D preview
-    this.rocketHolder.clear();
-    if (this.stack.length > 0) {
-      const { group, height: h } = buildRocketVisual(this.stack.map((def) => ({ def })));
-      group.position.y = h / 2;
-      this.rocketHolder.add(group);
-    }
+    ($('launch-btn') as HTMLButtonElement).disabled = !this.canLaunch();
   }
 
   update(dt: number): void {
@@ -234,10 +352,12 @@ export class VABScene implements GameScene {
         this.missionTimer = 0;
         this.refreshMissions();
       }
-      this.rocketHolder.rotation.y += dt * 0.35;
+      if (this.autoSpin) this.yaw += dt * 0.35;
     }
-    const h = Math.max(4, this.stack.reduce((s, d) => s + d.height, 0));
-    this.camera.position.set(Math.sin(0.6) * (h + 6), h * 0.62 + 1.5, Math.cos(0.6) * (h + 6));
+    this.rocketHolder.rotation.y = this.yaw;
+    const h = Math.max(4, this.stack.reduce((s, c) => s + c.def.height, 0));
+    const dist = (h + 6) * this.zoom;
+    this.camera.position.set(Math.sin(0.6) * dist, h * 0.62 * this.zoom + 1.5, Math.cos(0.6) * dist);
     this.camera.lookAt(0, h * 0.45, 0);
     this.host.renderer.render(this.scene, this.camera);
   }

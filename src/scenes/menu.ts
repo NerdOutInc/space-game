@@ -5,6 +5,7 @@ import { makeAtmosphereMaterial } from '../render/atmosphere';
 import { makeBodyTexture, makeStarfield } from '../render/textures';
 import { STATE } from '../state';
 import { GAIA, LUNA } from '../universe/bodies';
+import { terrainHeight } from '../universe/terrain';
 import { $ } from '../util/format';
 
 /** Title screen: Gaia turning slowly under the stars. */
@@ -22,8 +23,21 @@ export class MenuScene implements GameScene {
     this.scene.background = new THREE.Color(0x000004);
     this.scene.add(makeStarfield(60, 1800));
 
+    // Unit-scale Gaia with proportionally exaggerated terrain so the land
+    // rises through the water layer even at menu scale.
+    const geo = new THREE.SphereGeometry(1, 128, 64);
+    const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+    const dir = new THREE.Vector3();
+    for (let i = 0; i < posAttr.count; i++) {
+      dir.fromBufferAttribute(posAttr, i).normalize();
+      const h = terrainHeight(GAIA, dir);
+      dir.multiplyScalar(1 + (h / GAIA.radius) * 3); // 3× exaggeration for looks
+      posAttr.setXYZ(i, dir.x, dir.y, dir.z);
+    }
+    posAttr.needsUpdate = true;
+    geo.computeVertexNormals();
     this.gaia = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 96, 48),
+      geo,
       new THREE.MeshStandardMaterial({ map: makeBodyTexture(GAIA), roughness: 1 }),
     );
     // Menu planet is unit-scale; size the atmosphere shell proportionally.
@@ -40,6 +54,19 @@ export class MenuScene implements GameScene {
       ),
     );
     this.gaia.add(shell);
+    // water surface over the seabed texture
+    const water = new THREE.Mesh(
+      new THREE.SphereGeometry(1.001, 96, 48),
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color(GAIA.color).multiplyScalar(0.85),
+        transparent: true,
+        opacity: 0.62,
+        roughness: 0.12,
+        metalness: 0.05,
+        depthWrite: false,
+      }),
+    );
+    this.gaia.add(water);
     this.gaia.position.set(1.15, -0.25, 0);
     this.scene.add(this.gaia);
 

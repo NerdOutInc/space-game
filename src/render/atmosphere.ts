@@ -52,7 +52,9 @@ export function makeAtmosphereMaterial(
         // closest approach of this view ray to the planet center
         float b = uShellR * sqrt(max(1.0 - c * c, 0.0));
         float depth = exp(-max(b - uPlanetR, 0.0) / uScaleH);
-        gl_FragColor = vec4(uColor, depth * uIntensity);
+        // subtle veil over the disc, full strength only near the limb
+        float limb = smoothstep(uPlanetR * 0.55, uPlanetR, b);
+        gl_FragColor = vec4(uColor, depth * uIntensity * mix(0.22, 1.0, limb));
       }
     `,
     transparent: true,

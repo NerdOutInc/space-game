@@ -8,7 +8,7 @@ import { VABScene } from './scenes/vab';
 import { STATE } from './state';
 import { HOME } from './universe/bodies';
 import { showToast } from './util/toast';
-import { PartDef } from './vessel/parts';
+import { CraftPart } from './vessel/parts';
 import { Vessel } from './vessel/vessel';
 
 STATE.load();
@@ -70,8 +70,8 @@ class Game implements GameHost {
     this.switchTo(this.vab);
   }
 
-  launchVessel(defs: PartDef[]): void {
-    const vessel = new Vessel(defs, HOME);
+  launchVessel(craft: CraftPart[]): void {
+    const vessel = new Vessel(craft, HOME);
     vessel.name = STATE.nextName();
     STATE.add(vessel);
     this.switchTo(new FlightScene(this, vessel));
@@ -82,7 +82,7 @@ class Game implements GameHost {
   }
 
   revertVessel(vessel: Vessel): void {
-    const fresh = new Vessel(vessel.defs, HOME);
+    const fresh = new Vessel(vessel.craft, HOME);
     fresh.name = vessel.name;
     STATE.replace(vessel, fresh);
     this.switchTo(new FlightScene(this, fresh));
@@ -122,11 +122,16 @@ class Game implements GameHost {
       if (performance.now() - lastStep > 90) step();
     }, 30);
     if (import.meta.env.DEV) {
-      // Test hook: synchronously advance the game by `sec` seconds.
-      (window as unknown as { __step?: (sec: number) => void }).__step = (sec) => {
+      // Test hooks: synchronously advance the game; poke the world state.
+      const w = window as unknown as {
+        __step?: (sec: number) => void;
+        __state?: typeof STATE;
+      };
+      w.__step = (sec) => {
         const n = Math.ceil(sec / 0.05);
         for (let i = 0; i < n; i++) this.scene?.update(0.05);
       };
+      w.__state = STATE;
     }
   }
 }

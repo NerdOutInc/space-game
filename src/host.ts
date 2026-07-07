@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PartDef } from './vessel/parts';
+import { CraftPart } from './vessel/parts';
 import { Vessel } from './vessel/vessel';
 
 export interface GameScene {
@@ -14,8 +14,8 @@ export interface GameHost {
   renderer: THREE.WebGLRenderer;
   keys: Set<string>;
   toVAB(): void;
-  /** Build a new vessel from part defs, add it to the world, and fly it. */
-  launchVessel(defs: PartDef[]): void;
+  /** Build a new vessel from a craft design, add it to the world, and fly it. */
+  launchVessel(craft: CraftPart[]): void;
   /** Switch focus to an existing vessel. */
   flyVessel(vessel: Vessel): void;
   /** Reset a vessel to a fresh copy on the pad and fly it. */

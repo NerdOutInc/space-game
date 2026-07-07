@@ -49,7 +49,10 @@ export function makeBodyTexture(body: Body): THREE.CanvasTexture {
     const data = img.data;
     const dir = new THREE.Vector3();
     const t = body.terrain;
-    const deepWater = base.clone().multiplyScalar(0.45);
+    // Below datum is SEABED — the translucent water sphere renders above it,
+    // so depth reads through the water: sandy shallows fading to dark floor.
+    const seabedShallow = new THREE.Color(0xb09d78);
+    const seabedDeep = base.clone().multiplyScalar(0.22).lerp(_c1.set(0x06090f), 0.4);
     const highLand = land.clone().lerp(_c1.set(0xffffff), 0.15).multiplyScalar(0.8);
     const snow = new THREE.Color(0xe9eef4);
     for (let py = 0; py < h; py++) {
@@ -61,9 +64,8 @@ export function makeBodyTexture(body: Body): THREE.CanvasTexture {
         dir.set(-Math.cos(phi) * sinT, cosT, Math.sin(phi) * sinT);
         const height = terrainHeight(body, dir);
         if (t.ocean && height <= 0) {
-          // water: deeper = darker
-          const d = Math.min(1, -height / (t.amp * 0.7));
-          _out.copy(base).lerp(deepWater, d);
+          const d = Math.min(1, -height / (t.amp * 0.6));
+          _out.copy(seabedShallow).lerp(seabedDeep, Math.pow(d, 0.6));
         } else {
           const f = THREE.MathUtils.clamp(height / (t.amp * 0.95), 0, 1);
           _out.copy(land).lerp(highLand, f);

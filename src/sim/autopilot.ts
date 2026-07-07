@@ -69,12 +69,20 @@ export class Autopilot {
       return msgs;
     }
 
+    // Jettison side boosters as soon as they burn dry.
+    if (v.hasSpentBoosters() && v.firingEngines(pr).length > 0) {
+      const res = v.stage();
+      msgs.push(`Autopilot: ${res.msg}`);
+      if (res.droppedBoosters) sim.droppedBoosters.push(res.droppedBoosters);
+    }
+
     // Auto-stage when the current stage flames out under throttle.
     if (v.throttle > 0.02 && v.anyEngineIgnited() && v.firingEngines(pr).length === 0) {
-      if (v.stageCount() > 1) {
+      if (v.stageCount() > 1 || v.hasSpentBoosters()) {
         const res = v.stage();
         msgs.push(`Autopilot: ${res.msg}`);
         if (res.dropped) sim.dropped.push(res.dropped);
+        if (res.droppedBoosters) sim.droppedBoosters.push(res.droppedBoosters);
       } else {
         v.throttle = 0;
         msgs.push('Autopilot: out of propellant — disengaged');

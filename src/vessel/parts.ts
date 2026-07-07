@@ -116,6 +116,22 @@ export const PART_BY_ID: Record<string, PartDef> = Object.fromEntries(
   PARTS.map((p) => [p.id, p]),
 );
 
+/**
+ * One slot of a craft design: a stack part plus optional radially-attached
+ * side boosters (Anvil SRBs, in symmetric pairs of 2 or 4).
+ */
+export interface CraftPart {
+  def: PartDef;
+  boosters: number;
+}
+
+export const BOOSTER_DEF_ID = 'srb';
+
+/** Which stack parts can host radial boosters. */
+export function canHostBoosters(def: PartDef): boolean {
+  return def.type === 'tank' || def.type === 'srb';
+}
+
 /** Two-stage orbital launcher (needs unlocked parts). */
 export const SAMPLE_ROCKET: string[] = [
   'parachute',

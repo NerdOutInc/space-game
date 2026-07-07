@@ -96,15 +96,28 @@ hardware for a suborbital hop — fly it, recover it, and buy your way to
 orbit. Progress **saves automatically** (universal time, every vessel in
 flight, science, and unlocks) and the main menu offers Continue / New Game.
 
-### Terrain
+### Terrain & water
 
 Every landable world has procedural heightmap terrain from a seeded noise
 field — the same function drives the rendered mesh, the surface texture
-(oceans, beaches, snow lines), and ground collision, so what you see is
-what you land on. Gaia and Ember have seas (splashdowns are gentler than
-mountainsides); Luna and Ares are all rock. Below 5 km the HUD altitude
-switches to height above ground (AGL). The launch site sits on a flattened
-plain.
+(seabeds, beaches, snow lines), and ground collision, so what you see is
+what you land on. Ocean worlds render a translucent water surface at the
+datum over a displaced seabed, so depth reads through the shallows.
+Gaia and Ember have seas (splashdowns are gentler than mountainsides);
+Luna and Ares are all rock. Below 5 km the HUD altitude switches to height
+above ground (AGL). The launch site sits on a flattened plateau on dry
+land, found automatically on the sunlit side.
+
+### Staging & side boosters
+
+Space walks a KSP-style sequence — ignite → jettison spent boosters →
+decouple (auto-igniting the next stage) → **arm the parachute** (it then
+pops itself in atmosphere below 40 km while descending, so recovery is
+just part of the staging). The `␣` chip above the throttle always shows
+what the next press will do, and the VAB lists the full stage sequence.
+Tanks can carry 2 or 4 radial **Anvil side boosters** (◎+ button on the
+stack row) once the Anvil is unlocked. The VAB camera rotates (drag) and
+zooms (scroll), and the parts palette is grouped by category.
 
 ### Debug tools
 

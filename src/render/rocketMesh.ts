@@ -2,9 +2,17 @@ import * as THREE from 'three';
 import { PartDef } from '../vessel/parts';
 import { PartInstance } from '../vessel/vessel';
 
+export interface BoosterMount {
+  x: number;
+  y: number; // bottom of the booster (flame anchor)
+  z: number;
+}
+
 export interface RocketVisual {
   group: THREE.Group;
   height: number;
+  /** One entry per radial booster, in input order. */
+  boosterMounts: BoosterMount[];
 }
 
 function metal(color: number, rough = 0.55): THREE.MeshStandardMaterial {
@@ -139,22 +147,48 @@ function buildPartMesh(def: PartDef, deployed: boolean): THREE.Group {
 
 /**
  * Build meshes for a part stack (ordered top → bottom), centered vertically
- * on the group's origin.
+ * on the group's origin, plus any radially-attached side boosters.
  */
 export function buildRocketVisual(
   parts: Array<PartInstance | { def: PartDef; deployed?: boolean }>,
+  boosters: Array<{ def: PartDef; hostIndex: number }> = [],
 ): RocketVisual {
   const group = new THREE.Group();
   const height = parts.reduce((s, p) => s + p.def.height, 0);
+  const centerY: number[] = new Array(parts.length).fill(0);
   let y = -height / 2;
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
     const mesh = buildPartMesh(p.def, 'deployed' in p ? !!p.deployed : false);
-    mesh.position.y = y + p.def.height / 2;
+    centerY[i] = y + p.def.height / 2;
+    mesh.position.y = centerY[i];
     group.add(mesh);
     y += p.def.height;
   }
-  return { group, height };
+
+  // Radial boosters: symmetric around the host (±X first, then ±Z)
+  const boosterMounts: BoosterMount[] = [];
+  const slotCount = new Map<number, number>();
+  const ANGLES = [0, Math.PI, Math.PI / 2, (3 * Math.PI) / 2];
+  for (const b of boosters) {
+    const host = parts[b.hostIndex];
+    if (!host) continue;
+    const slot = slotCount.get(b.hostIndex) ?? 0;
+    slotCount.set(b.hostIndex, slot + 1);
+    const a = ANGLES[slot % ANGLES.length];
+    const offset = host.def.radius + b.def.radius + 0.06;
+    const mesh = buildPartMesh(b.def, false);
+    const hostBottom = centerY[b.hostIndex] - host.def.height / 2;
+    const cy = hostBottom - 0.4 + b.def.height / 2; // hang slightly below host
+    mesh.position.set(Math.cos(a) * offset, cy, Math.sin(a) * offset);
+    group.add(mesh);
+    boosterMounts.push({
+      x: Math.cos(a) * offset,
+      y: cy - b.def.height / 2,
+      z: Math.sin(a) * offset,
+    });
+  }
+  return { group, height, boosterMounts };
 }
 
 /** Additive exhaust cone; scale/flicker it from the flight scene. */

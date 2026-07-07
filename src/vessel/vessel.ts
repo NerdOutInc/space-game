@@ -1,17 +1,26 @@
 import * as THREE from 'three';
 import { Body, HOME } from '../universe/bodies';
-import { G0, PartDef } from './parts';
+import { PAD_DIR } from '../universe/terrain';
+import { BOOSTER_DEF_ID, CraftPart, G0, PART_BY_ID, PartDef } from './parts';
 
 export interface PartInstance {
   def: PartDef;
   fuel: number;
   ignited: boolean;
   deployed: boolean;
+  /** Parachutes: staged and waiting for safe atmosphere conditions. */
+  armed: boolean;
+}
+
+/** A radially-attached side booster, tied to a stack part by index. */
+export interface BoosterInstance extends PartInstance {
+  hostIndex: number;
 }
 
 export interface StageResult {
   msg: string;
   dropped: PartInstance[] | null;
+  droppedBoosters: BoosterInstance[] | null;
 }
 
 interface EngineFiring {
@@ -20,12 +29,17 @@ interface EngineFiring {
   mdot: number; // kg/s
 }
 
+function newInstance(def: PartDef): PartInstance {
+  return { def, fuel: def.fuel ?? 0, ignited: false, deployed: false, armed: false };
+}
+
 export class Vessel {
-  parts: PartInstance[]; // ordered top → bottom
+  parts: PartInstance[]; // stack, ordered top → bottom
+  boosters: BoosterInstance[] = [];
 
   name = 'Untitled Craft';
   /** The original build, kept for "revert to launch". */
-  readonly defs: PartDef[];
+  readonly craft: CraftPart[];
 
   body: Body;
   /** Position/velocity relative to `body` center, non-rotating frame. */
@@ -41,19 +55,20 @@ export class Vessel {
   /** Has this vessel ever left the atmosphere? (drives the recovery bonus) */
   reachedSpace = false;
   /** Surface-fixed unit direction of the landing spot (body frame). */
-  landedDir = new THREE.Vector3(-1, 0, 0); // sunlit side at t=0
+  landedDir = PAD_DIR.clone();
   launchedAt: number | null = null;
 
   private hadThrust = false;
 
-  constructor(defs: PartDef[], body: Body = HOME) {
-    this.defs = [...defs];
-    this.parts = defs.map((def) => ({
-      def,
-      fuel: def.fuel ?? 0,
-      ignited: false,
-      deployed: false,
-    }));
+  constructor(craft: CraftPart[], body: Body = HOME) {
+    this.craft = craft.map((c) => ({ def: c.def, boosters: c.boosters }));
+    this.parts = craft.map((c) => newInstance(c.def));
+    const srb = PART_BY_ID[BOOSTER_DEF_ID];
+    craft.forEach((c, i) => {
+      for (let k = 0; k < (c.boosters ?? 0); k++) {
+        this.boosters.push({ ...newInstance(srb), hostIndex: i });
+      }
+    });
     this.body = body;
   }
 
@@ -78,6 +93,16 @@ export class Vessel {
     return gs[gs.length - 1];
   }
 
+  /** Index of the first stack part in the bottom group. */
+  private bottomGroupStart(): number {
+    return this.parts.map((p) => p.def.type).lastIndexOf('decoupler') + 1;
+  }
+
+  private bottomBoosters(): BoosterInstance[] {
+    const start = this.bottomGroupStart();
+    return this.boosters.filter((b) => b.hostIndex >= start);
+  }
+
   stageCount(): number {
     return this.groups().length;
   }
@@ -85,6 +110,7 @@ export class Vessel {
   mass(): number {
     let m = 0;
     for (const p of this.parts) m += p.def.dryMass + p.fuel;
+    for (const b of this.boosters) m += b.def.dryMass + b.fuel;
     return m;
   }
 
@@ -96,6 +122,7 @@ export class Vessel {
 
   dragArea(): number {
     let cda = 1.5; // rough Cd*A for the whole stack
+    cda += this.boosters.length * 0.5;
     for (const p of this.parts) {
       if (p.def.type === 'parachute' && p.deployed) cda += 380;
     }
@@ -113,16 +140,18 @@ export class Vessel {
       .filter((p) => p.def.type === 'tank')
       .reduce((s, p) => s + p.fuel, 0);
     const out: EngineFiring[] = [];
-    for (const p of bottom) {
-      if ((p.def.type !== 'engine' && p.def.type !== 'srb') || !p.ignited) continue;
+    const consider = (p: PartInstance) => {
+      if ((p.def.type !== 'engine' && p.def.type !== 'srb') || !p.ignited) return;
       const lvl = p.def.throttleable === false ? 1 : this.throttle;
-      if (lvl <= 1e-3) continue;
+      if (lvl <= 1e-3) return;
       const avail = p.def.type === 'srb' ? p.fuel : tankFuel;
-      if (avail <= 0) continue;
+      if (avail <= 0) return;
       const isp = p.def.ispVac! + (p.def.ispAtm! - p.def.ispVac!) * pressureRatio;
       const thrust = p.def.thrust! * lvl;
       out.push({ part: p, thrust, mdot: thrust / (isp * G0) });
-    }
+    };
+    for (const p of bottom) consider(p);
+    for (const b of this.boosters) consider(b); // boosters carry their own fuel
     return out;
   }
 
@@ -155,10 +184,7 @@ export class Vessel {
     }
 
     // Flameout: we were thrusting, engines remain lit, but nothing can fire now.
-    const anyIgnited = bottom.some(
-      (p) => (p.def.type === 'engine' || p.def.type === 'srb') && p.ignited,
-    );
-    if (this.hadThrust && anyIgnited && this.throttle > 1e-3) {
+    if (this.hadThrust && this.anyEngineIgnited() && this.throttle > 1e-3) {
       const canFire = this.firingEngines(pressureRatio).length > 0;
       if (!canFire) {
         this.hadThrust = false;
@@ -168,59 +194,129 @@ export class Vessel {
     return false;
   }
 
+  anyEngineIgnited(): boolean {
+    return (
+      this.bottomGroup().some(
+        (p) => (p.def.type === 'engine' || p.def.type === 'srb') && p.ignited,
+      ) || this.boosters.some((b) => b.ignited)
+    );
+  }
+
+  /** Ignited side boosters that have burned dry (ready to jettison). */
+  hasSpentBoosters(): boolean {
+    return (
+      this.boosters.length > 0 &&
+      this.boosters.every((b) => !b.ignited || b.fuel <= 0) &&
+      this.boosters.some((b) => b.ignited && b.fuel <= 0)
+    );
+  }
+
   /** Fuel fraction of the current bottom stage (for the HUD gauge). */
   stageFuelFraction(): number {
-    const bottom = this.bottomGroup();
     let cap = 0;
     let cur = 0;
-    for (const p of bottom) {
+    for (const p of this.bottomGroup()) {
       if (p.def.fuel) {
         cap += p.def.fuel;
         cur += p.fuel;
       }
     }
+    for (const b of this.bottomBoosters()) {
+      cap += b.def.fuel ?? 0;
+      cur += b.fuel;
+    }
     return cap > 0 ? cur / cap : 0;
   }
 
-  /** Activate the next stage: ignite unlit engines, or decouple and ignite. */
-  stage(): StageResult {
+  /** What the next Space press will do (for the HUD). */
+  nextStageLabel(): string {
     const bottom = this.bottomGroup();
     const engines = bottom.filter(
       (p) => p.def.type === 'engine' || p.def.type === 'srb',
     );
-    const unlit = engines.filter((e) => !e.ignited);
+    const unlitCore = engines.some((e) => !e.ignited);
+    const unlitBoosters = this.bottomBoosters().some((b) => !b.ignited);
+    if (unlitCore || unlitBoosters) return 'ignition';
+    if (this.hasSpentBoosters()) return 'drop boosters';
+    if (this.parts.some((p) => p.def.type === 'decoupler')) return 'stage sep';
+    if (this.parts.some((p) => p.def.type === 'parachute' && !p.deployed && !p.armed))
+      return 'arm chute';
+    return '—';
+  }
+
+  /**
+   * Activate the next stage, KSP-style:
+   * ignite → jettison spent boosters → decouple (+auto-ignite) → arm chutes.
+   */
+  stage(): StageResult {
+    const none = { dropped: null, droppedBoosters: null };
+    const bottom = this.bottomGroup();
+    const engines = bottom.filter(
+      (p) => p.def.type === 'engine' || p.def.type === 'srb',
+    );
+    const unlit: PartInstance[] = [
+      ...engines.filter((e) => !e.ignited),
+      ...this.bottomBoosters().filter((b) => !b.ignited),
+    ];
     if (unlit.length > 0) {
       unlit.forEach((e) => (e.ignited = true));
       this.hadThrust = false;
-      return { msg: 'Ignition!', dropped: null };
+      return { msg: 'Ignition!', ...none };
     }
+
+    if (this.hasSpentBoosters()) {
+      const spent = this.boosters.filter((b) => b.ignited);
+      this.boosters = this.boosters.filter((b) => !b.ignited);
+      return { msg: 'Booster separation', dropped: null, droppedBoosters: spent };
+    }
+
     const idx = this.parts.map((p) => p.def.type).lastIndexOf('decoupler');
-    if (idx === -1) return { msg: 'No stages left', dropped: null };
-    const dropped = this.parts.slice(idx); // decoupler goes with the lower half
-    this.parts = this.parts.slice(0, idx);
-    // Auto-ignite the new bottom stage's engines.
-    for (const p of this.bottomGroup()) {
-      if (p.def.type === 'engine' || p.def.type === 'srb') p.ignited = true;
+    if (idx !== -1) {
+      const dropped = this.parts.slice(idx); // decoupler goes with the lower half
+      const droppedBoosters = this.boosters.filter((b) => b.hostIndex >= idx);
+      this.boosters = this.boosters.filter((b) => b.hostIndex < idx);
+      this.parts = this.parts.slice(0, idx);
+      // Auto-ignite the new bottom stage's engines and boosters.
+      for (const p of this.bottomGroup()) {
+        if (p.def.type === 'engine' || p.def.type === 'srb') p.ignited = true;
+      }
+      for (const b of this.bottomBoosters()) b.ignited = true;
+      this.hadThrust = false;
+      return {
+        msg: 'Stage separation',
+        dropped,
+        droppedBoosters: droppedBoosters.length ? droppedBoosters : null,
+      };
     }
-    this.hadThrust = false;
-    return { msg: 'Stage separation', dropped };
+
+    const chute = this.parts.find(
+      (p) => p.def.type === 'parachute' && !p.deployed && !p.armed,
+    );
+    if (chute) {
+      chute.armed = true;
+      return {
+        msg: 'Parachute armed — deploys in atmosphere below 40 km',
+        ...none,
+      };
+    }
+
+    return { msg: 'No stages left', ...none };
   }
 
   deployParachute(): boolean {
     const chute = this.parts.find((p) => p.def.type === 'parachute' && !p.deployed);
     if (!chute) return false;
     chute.deployed = true;
+    chute.armed = false;
     return true;
   }
 
-  anyEngineIgnited(): boolean {
-    return this.bottomGroup().some(
-      (p) => (p.def.type === 'engine' || p.def.type === 'srb') && p.ignited,
-    );
+  deployedChutes(): number {
+    return this.parts.filter((p) => p.def.type === 'parachute' && p.deployed).length;
   }
 }
 
-// ---------- VAB stage statistics (Tsiolkovsky per stage) ----------
+// ---------- craft statistics for the VAB ----------
 
 export interface StageStats {
   index: number; // 1 = first stage to burn (bottom)
@@ -229,40 +325,87 @@ export interface StageStats {
   fuel: number; // kg
 }
 
-export function computeStageStats(defs: PartDef[], g = 9.81): StageStats[] {
-  // Split into groups (top → bottom) tracking decoupler masses between them.
-  const groups: PartDef[][] = [];
-  const decouplers: PartDef[] = []; // decoupler above group i sits at decouplers[i-1]
-  let cur: PartDef[] = [];
-  for (const d of defs) {
-    if (d.type === 'decoupler') {
+interface GroupInfo {
+  parts: PartDef[];
+  boosters: number;
+  decouplerAbove: PartDef | null;
+}
+
+function splitGroups(craft: CraftPart[]): GroupInfo[] {
+  const groups: GroupInfo[] = [];
+  let cur: GroupInfo = { parts: [], boosters: 0, decouplerAbove: null };
+  for (const c of craft) {
+    if (c.def.type === 'decoupler') {
       groups.push(cur);
-      decouplers.push(d);
-      cur = [];
+      cur = { parts: [], boosters: 0, decouplerAbove: c.def };
     } else {
-      cur.push(d);
+      cur.parts.push(c.def);
+      cur.boosters += c.boosters ?? 0;
     }
   }
   groups.push(cur);
+  return groups; // top → bottom
+}
 
-  let m0 = defs.reduce((s, d) => s + d.dryMass + (d.fuel ?? 0), 0);
+export function computeStageStats(craft: CraftPart[], g = 9.81): StageStats[] {
+  const srb = PART_BY_ID[BOOSTER_DEF_ID];
+  const groups = splitGroups(craft);
+  let m0 = craft.reduce(
+    (s, c) =>
+      s +
+      c.def.dryMass +
+      (c.def.fuel ?? 0) +
+      (c.boosters ?? 0) * (srb.dryMass + (srb.fuel ?? 0)),
+    0,
+  );
   const stats: StageStats[] = [];
   for (let gi = groups.length - 1; gi >= 0; gi--) {
-    const g_ = groups[gi];
-    const engines = g_.filter((d) => d.type === 'engine' || d.type === 'srb');
-    const fuel = g_.reduce((s, d) => s + (d.fuel ?? 0), 0);
-    const thrust = engines.reduce((s, d) => s + (d.thrust ?? 0), 0);
-    const isp =
-      engines.length > 0
-        ? engines.reduce((s, d) => s + (d.ispVac ?? 0), 0) / engines.length
-        : 0;
-    const dv = isp > 0 && fuel > 0 && m0 > fuel ? isp * G0 * Math.log(m0 / (m0 - fuel)) : 0;
+    const grp = groups[gi];
+    const engines = grp.parts.filter((d) => d.type === 'engine' || d.type === 'srb');
+    let thrust = engines.reduce((s, d) => s + (d.thrust ?? 0), 0);
+    let fuel = grp.parts.reduce((s, d) => s + (d.fuel ?? 0), 0);
+    let ispWeighted = engines.reduce((s, d) => s + (d.ispVac ?? 0) * (d.thrust ?? 0), 0);
+    if (grp.boosters > 0) {
+      thrust += grp.boosters * (srb.thrust ?? 0);
+      fuel += grp.boosters * (srb.fuel ?? 0);
+      ispWeighted += grp.boosters * (srb.ispVac ?? 0) * (srb.thrust ?? 0);
+    }
+    const isp = thrust > 0 ? ispWeighted / thrust : 0;
+    const dv =
+      isp > 0 && fuel > 0 && m0 > fuel ? isp * G0 * Math.log(m0 / (m0 - fuel)) : 0;
     const twr = thrust > 0 ? thrust / (m0 * g) : 0;
     stats.push({ index: groups.length - gi, dv, twr, fuel });
-    // Drop this group (wet) plus the decoupler above it.
-    const groupWet = g_.reduce((s, d) => s + d.dryMass + (d.fuel ?? 0), 0);
-    const dec = gi > 0 ? decouplers[gi - 1].dryMass : 0;
-    m0 -= groupWet + dec;
+    const groupWet =
+      grp.parts.reduce((s, d) => s + d.dryMass + (d.fuel ?? 0), 0) +
+      grp.boosters * (srb.dryMass + (srb.fuel ?? 0));
+    m0 -= groupWet + (grp.decouplerAbove?.dryMass ?? 0);
   }
   return stats;
+}
+
+/** Human-readable stage sequence — one line per Space press. */
+export function describeStages(craft: CraftPart[]): string[] {
+  const groups = splitGroups(craft);
+  const out: string[] = [];
+  const engineNames = (grp: GroupInfo): string[] => {
+    const engines = grp.parts.filter((d) => d.type === 'engine' || d.type === 'srb');
+    const bits = engines.map((e) => e.name.replace(/".*?" /, '').replace(' Engine', ''));
+    if (grp.boosters > 0) bits.push(`${grp.boosters}× side booster`);
+    return bits;
+  };
+  for (let gi = groups.length - 1; gi >= 0; gi--) {
+    const grp = groups[gi];
+    const bits = engineNames(grp);
+    if (gi === groups.length - 1) {
+      // first stage: its own ignition press
+      if (bits.length > 0) out.push(`Ignite ${bits.join(' + ')}`);
+    }
+    if (grp.boosters > 0) out.push('Jettison boosters');
+    if (gi > 0) {
+      const next = engineNames(groups[gi - 1]);
+      out.push(next.length > 0 ? `Decouple + ignite ${next.join(' + ')}` : 'Decouple');
+    }
+  }
+  if (craft.some((c) => c.def.type === 'parachute')) out.push('Arm parachute');
+  return out;
 }

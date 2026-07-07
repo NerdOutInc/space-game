@@ -72,23 +72,70 @@ function seedOf(body: Body): number {
   return h | 0;
 }
 
-const PAD_DIR = new THREE.Vector3(-1, 0, 0); // launch site (body-fixed)
+/** Raw fBm height with no launch-site flattening. */
+function rawHeight(body: Body, dirFixed: THREE.Vector3): number {
+  const t = body.terrain;
+  if (!t) return 0;
+  return (
+    fbm(dirFixed.x * t.scale, dirFixed.y * t.scale, dirFixed.z * t.scale, seedOf(body)) *
+      t.amp +
+    t.bias
+  );
+}
+
+/**
+ * Find dry land for the launch site: walk the equator outward from
+ * longitude 180° (sunlit at t=0) until the terrain is comfortably above sea
+ * level in the whole neighborhood. Deterministic, since the noise is seeded.
+ */
+const _up = new THREE.Vector3(0, 1, 0);
+
+function findPadSite(): { dir: THREE.Vector3; alt: number } {
+  const dir = new THREE.Vector3();
+  const probe = new THREE.Vector3();
+  for (let dphi = 0; dphi < Math.PI; dphi += 0.015) {
+    for (const s of dphi === 0 ? [1] : [1, -1]) {
+      const phi = Math.PI + dphi * s;
+      dir.set(Math.cos(phi), 0, -Math.sin(phi));
+      const h = rawHeight(HOME, dir);
+      if (h < 150 || h > 2500) continue;
+      // require dry land all around (~12 km ring), not just at the center
+      const east = new THREE.Vector3(-Math.sin(phi), 0, -Math.cos(phi));
+      let clear = true;
+      for (let k = 0; k < 8 && clear; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        probe
+          .copy(dir)
+          .addScaledVector(east, Math.cos(a) * 0.02)
+          .addScaledVector(_up, Math.sin(a) * 0.02)
+          .normalize();
+        if (rawHeight(HOME, probe) < 60) clear = false;
+      }
+      if (clear) return { dir: dir.clone(), alt: h };
+    }
+  }
+  return { dir: new THREE.Vector3(-1, 0, 0), alt: 0 };
+}
+
+const PAD_SITE = findPadSite();
+/** Body-fixed direction of Gaia's launch site (always on dry land). */
+export const PAD_DIR = PAD_SITE.dir;
+/** Terrain height the pad plateau is flattened to, m above datum. */
+export const PAD_ALT = Math.max(60, PAD_SITE.alt);
 
 /**
  * Terrain height above datum (m) at a body-fixed unit direction.
  * Negative values are below datum (ocean floor on worlds with seas).
- * The area around Gaia's launch site is flattened to the datum.
+ * The area around Gaia's launch site is flattened into a plateau.
  */
 export function terrainHeight(body: Body, dirFixed: THREE.Vector3): number {
   const t = body.terrain;
   if (!t) return 0;
-  let h =
-    fbm(dirFixed.x * t.scale, dirFixed.y * t.scale, dirFixed.z * t.scale, seedOf(body)) *
-      t.amp +
-    t.bias;
+  let h = rawHeight(body, dirFixed);
   if (body === HOME) {
     const ang = dirFixed.angleTo(PAD_DIR);
-    h *= THREE.MathUtils.smoothstep(ang, 0.006, 0.03);
+    const f = THREE.MathUtils.smoothstep(ang, 0.006, 0.03);
+    h = PAD_ALT * (1 - f) + h * f;
   }
   return h;
 }
@@ -107,14 +154,17 @@ export function isWater(body: Body, dirFixed: THREE.Vector3): boolean {
 const _dir = new THREE.Vector3();
 const _pos = new THREE.Vector3();
 
-/** Radially displace a sphere geometry by the body's terrain (render mesh). */
+/**
+ * Radially displace a sphere geometry by RAW terrain height — ocean floors
+ * dip below the datum; the translucent water sphere covers them.
+ */
 export function displacePlanetGeometry(geo: THREE.SphereGeometry, body: Body): void {
   if (!body.terrain) return;
   const pos = geo.getAttribute('position') as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
     _pos.fromBufferAttribute(pos, i);
     _dir.copy(_pos).normalize();
-    const h = groundHeight(body, _dir);
+    const h = terrainHeight(body, _dir);
     _pos.copy(_dir).multiplyScalar(body.radius + h);
     pos.setXYZ(i, _pos.x, _pos.y, _pos.z);
   }

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { propagateKepler } from '../math/kepler';
 import { GameState } from '../state';
 import { groundHeight, isWater } from '../universe/terrain';
-import { PartInstance, Vessel } from '../vessel/vessel';
+import { BoosterInstance, PartInstance, Vessel } from '../vessel/vessel';
 import { Autopilot } from './autopilot';
 
 export interface Controls {
@@ -34,6 +34,7 @@ export class Simulation {
   autopilot = new Autopilot();
   /** Parts dropped by autopilot staging, for the scene to turn into debris. */
   dropped: PartInstance[][] = [];
+  droppedBoosters: BoosterInstance[][] = [];
   private state: GameState;
 
   constructor(vessel: Vessel, state: GameState) {
@@ -155,6 +156,18 @@ export class Simulation {
     }
     if (v.anyEngineIgnited() && v.burn(h, pressureRatio)) {
       msgs.push('Flameout — stage out of propellant');
+    }
+
+    // Armed parachutes pop automatically once it's safe-ish: in atmosphere,
+    // below 40 km, and descending.
+    if (b.atmosphere && alt < 40_000 && v.pos.dot(v.vel) < 0) {
+      for (const p of v.parts) {
+        if (p.def.type === 'parachute' && p.armed && !p.deployed) {
+          p.deployed = true;
+          p.armed = false;
+          msgs.push('Parachute deployed!');
+        }
+      }
     }
 
     // Drag (relative to the co-rotating atmosphere)
