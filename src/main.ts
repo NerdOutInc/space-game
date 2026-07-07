@@ -11,7 +11,7 @@ import { showToast } from './util/toast';
 import { CraftPart } from './vessel/parts';
 import { Vessel } from './vessel/vessel';
 
-STATE.load();
+STATE.loadLatest();
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 

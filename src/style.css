@@ -558,14 +558,49 @@ body {
   color: var(--accent);
   font-size: 14px;
 }
-.menu-hint {
-  margin-top: 10px;
-  font-size: 10px;
-  color: #7b8794;
-  letter-spacing: 0.08em;
+#save-list {
+  margin-top: 22px;
+  width: 380px;
+  max-height: 260px;
+  overflow-y: auto;
 }
-.menu-hint.hidden {
+#save-list.hidden {
   display: none;
+}
+.save-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  margin-bottom: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+}
+.save-row > div {
+  flex: 1;
+  min-width: 0;
+}
+.save-row small {
+  display: block;
+  color: #8a97a5;
+  font-size: 10px;
+  margin-top: 3px;
+}
+.badge {
+  font-size: 9px;
+  font-weight: normal;
+  letter-spacing: 0.15em;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.badge.science {
+  color: var(--good);
+  border: 1px solid rgba(125, 255, 168, 0.4);
+}
+.badge.freedom {
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
 }
 #menu-free.hidden {
   display: none;

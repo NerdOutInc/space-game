@@ -167,10 +167,15 @@ export function canHostChutes(def: PartDef): boolean {
   return def.type === 'capsule' || def.type === 'tank' || def.type === 'dock';
 }
 
-/** Two-stage orbital launcher (needs unlocked parts). */
+/**
+ * Three-stage orbital launcher with a proper reentry capsule on top
+ * (chute + capsule + heat shield come home together). Needs unlocked parts.
+ */
 export const SAMPLE_ROCKET: string[] = [
   'parachute',
   'capsule',
+  'shield',
+  'decoupler',
   'tank-small',
   'engine-vac',
   'decoupler',

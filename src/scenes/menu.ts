@@ -6,7 +6,7 @@ import { makeBodyTexture, makeStarfield } from '../render/textures';
 import { STATE } from '../state';
 import { GAIA, LUNA } from '../universe/bodies';
 import { terrainHeight } from '../universe/terrain';
-import { $ } from '../util/format';
+import { $, fmtTime } from '../util/format';
 
 /** Title screen: Gaia turning slowly under the stars. */
 export class MenuScene implements GameScene {
@@ -97,17 +97,9 @@ export class MenuScene implements GameScene {
     $('menu-ui').classList.remove('hidden');
     AUDIO.playMusic('cosmic');
     AUDIO.syncSliders('vol-music', 'vol-sfx');
-    // Load Save only appears when there's a save to load; the two New Game
-    // buttons are always available (with a warning when they'd replace one).
-    const hasSave = STATE.hasSave();
-    $('menu-load').classList.toggle('hidden', !hasSave);
-    $('menu-wipe-hint').classList.toggle('hidden', !hasSave);
+    this.refreshSaves();
     if (!this.bound) {
       this.bound = true;
-      $('menu-load').addEventListener('click', () => {
-        AUDIO.unlock();
-        this.host.toVAB();
-      });
       $('menu-start').addEventListener('click', () => {
         AUDIO.unlock();
         STATE.reset('science');
@@ -119,6 +111,49 @@ export class MenuScene implements GameScene {
         this.host.toVAB();
       });
       AUDIO.bindSliders('vol-music', 'vol-sfx');
+    }
+  }
+
+  /** One row per save slot: mode badge, progress summary, load + delete. */
+  private refreshSaves(): void {
+    const slots = STATE.listSlots();
+    $('save-list').classList.toggle('hidden', slots.length === 0);
+    const rows = $('save-rows');
+    rows.innerHTML = '';
+    for (const slot of slots) {
+      const row = document.createElement('div');
+      row.className = 'save-row';
+      const info = document.createElement('div');
+      const when = slot.savedAt
+        ? new Date(slot.savedAt).toLocaleString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        : '—';
+      const sci = slot.mode === 'science' ? ` · ✦ ${slot.science}` : '';
+      info.innerHTML = `<b class="badge ${slot.mode}">${slot.mode === 'freedom' ? 'SANDBOX' : 'SCIENCE'}</b>
+        <small>UT ${fmtTime(slot.ut)} · ${slot.vessels} vessel${slot.vessels === 1 ? '' : 's'}${sci} · ${when}</small>`;
+      row.appendChild(info);
+      const load = document.createElement('button');
+      load.className = 'btn';
+      load.textContent = 'LOAD';
+      load.addEventListener('click', () => {
+        AUDIO.unlock();
+        if (STATE.loadSlot(slot.id)) this.host.toVAB();
+      });
+      row.appendChild(load);
+      const del = document.createElement('button');
+      del.className = 'btn danger';
+      del.textContent = '✕';
+      del.title = 'Delete this save';
+      del.addEventListener('click', () => {
+        STATE.deleteSlot(slot.id);
+        this.refreshSaves();
+      });
+      row.appendChild(del);
+      rows.appendChild(row);
     }
   }
 

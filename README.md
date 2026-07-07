@@ -24,7 +24,8 @@ using the repository path (`/space-game/`).
    A valid rocket needs a capsule and at least one engine. Decouplers split
    the stack into stages; the parts *below* a decoupler are dropped when you
    stage. The panel on the right shows per-stage Δv and TWR. "Load sample
-   rocket" gives you a proven two-stage orbital launcher.
+   rocket" gives you a proven three-stage launcher whose top stage is a
+   proper reentry capsule (parachute + capsule + heat shield).
 2. **Launch** — press `Space` to ignite. Once your thrust exceeds gravity,
    you're flying.
 3. **Fly to orbit** — climb, then pitch east (`W`) starting around 8–10 km
@@ -143,7 +144,10 @@ recovering a spacefaring vessel. Spend it in the VAB to unlock the solid
 booster, the big tank, and the vacuum engine. You start with just enough
 hardware for a suborbital hop — fly it, recover it, and buy your way to
 orbit. Progress **saves automatically** (universal time, every vessel in
-flight, science, and unlocks) and the main menu offers Continue / New Game.
+flight, science, and unlocks) into **save slots** — the menu lists every
+saved game with a SCIENCE/SANDBOX badge, playtime, and vessel count; load
+any of them or delete the ones you're done with. New games always start a
+fresh slot.
 
 ### Terrain & water
 

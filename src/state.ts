@@ -8,7 +8,18 @@ const _p = new THREE.Vector3();
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
 
-const SAVE_KEY = 'zenith-save-v1';
+const SLOT_PREFIX = 'zenith-slot-';
+const LEGACY_KEY = 'zenith-save-v1';
+
+/** Menu-facing summary of one saved game. */
+export interface SlotMeta {
+  id: string;
+  mode: GameMode;
+  savedAt: number; // epoch ms
+  ut: number; // universal time, s
+  science: number;
+  vessels: number;
+}
 
 /** Science milestones: earned once per save, spent on part unlocks. */
 export const MILESTONE_DEFS: Record<string, { name: string; pts: number }> = {
@@ -84,6 +95,7 @@ interface SaveData {
   unlocked: string[];
   vessels: SavedVessel[];
   mode?: GameMode;
+  savedAt?: number;
 }
 
 /**
@@ -103,8 +115,8 @@ export class GameState {
   /** Purchased part ids (parts without a cost are always available). */
   unlocked = new Set<string>();
   private counter = 1;
-  /** Set after wipeSave() so the pre-reload autosave can't resurrect the save. */
-  private wiped = false;
+  /** Which save slot this session writes to (created lazily on first save). */
+  private activeSlot: string | null = null;
 
   nextName(): string {
     return `Zenith ${this.counter++}`;
@@ -139,7 +151,7 @@ export class GameState {
     return !def.cost || this.unlocked.has(def.id);
   }
 
-  /** Start a fresh game in the given mode (replaces any existing save). */
+  /** Start a fresh game in the given mode, in a brand-new save slot. */
   reset(mode: GameMode): void {
     this.t = 0;
     this.vessels = [];
@@ -148,7 +160,7 @@ export class GameState {
     this.milestones = new Set();
     this.unlocked = new Set();
     this.counter = 1;
-    this.wiped = false;
+    this.activeSlot = `${SLOT_PREFIX}${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
     this.save();
   }
 
@@ -214,11 +226,57 @@ export class GameState {
   // ---------- persistence ----------
 
   hasSave(): boolean {
-    return localStorage.getItem(SAVE_KEY) !== null;
+    return this.listSlots().length > 0;
+  }
+
+  /** All saved games, newest first. */
+  listSlots(): SlotMeta[] {
+    this.migrateLegacy();
+    const out: SlotMeta[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(SLOT_PREFIX)) continue;
+      try {
+        const data = JSON.parse(localStorage.getItem(key)!) as SaveData;
+        out.push({
+          id: key,
+          mode: data.mode ?? 'science',
+          savedAt: data.savedAt ?? 0,
+          ut: data.t ?? 0,
+          science: data.science ?? 0,
+          vessels: (data.vessels ?? []).length,
+        });
+      } catch {
+        // unreadable slot — skip it
+      }
+    }
+    out.sort((a, b) => b.savedAt - a.savedAt);
+    return out;
+  }
+
+  /** One-time move of the old single-save key into the slot system. */
+  private migrateLegacy(): void {
+    const raw = localStorage.getItem(LEGACY_KEY);
+    if (!raw) return;
+    try {
+      const data = JSON.parse(raw) as SaveData;
+      data.savedAt = data.savedAt ?? Date.now();
+      localStorage.setItem(`${SLOT_PREFIX}legacy`, JSON.stringify(data));
+    } catch {
+      // corrupted legacy save — drop it
+    }
+    localStorage.removeItem(LEGACY_KEY);
+  }
+
+  deleteSlot(id: string): void {
+    localStorage.removeItem(id);
+    if (this.activeSlot === id) this.activeSlot = null;
   }
 
   save(): void {
-    if (this.wiped) return;
+    if (!this.activeSlot) {
+      this.activeSlot = `${SLOT_PREFIX}${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
+    }
     const data: SaveData = {
       version: 3,
       t: this.t,
@@ -227,6 +285,7 @@ export class GameState {
       milestones: [...this.milestones],
       unlocked: [...this.unlocked],
       mode: this.mode,
+      savedAt: Date.now(),
       vessels: this.vessels.map((v) => ({
         name: v.name,
         body: v.body.name,
@@ -267,15 +326,21 @@ export class GameState {
       })),
     };
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+      localStorage.setItem(this.activeSlot, JSON.stringify(data));
     } catch {
       // storage full/unavailable — play on without saving
     }
   }
 
-  /** Load the save if present. Returns true when progress was restored. */
-  load(): boolean {
-    const raw = localStorage.getItem(SAVE_KEY);
+  /** Load the most recently played slot (after legacy migration). */
+  loadLatest(): boolean {
+    const slots = this.listSlots();
+    return slots.length > 0 ? this.loadSlot(slots[0].id) : false;
+  }
+
+  /** Load a specific save slot. Returns true when progress was restored. */
+  loadSlot(id: string): boolean {
+    const raw = localStorage.getItem(id);
     if (!raw) return false;
     try {
       const data = JSON.parse(raw) as SaveData;
@@ -353,15 +418,11 @@ export class GameState {
           b.computeDockLink();
         }
       });
+      this.activeSlot = id;
       return true;
     } catch {
       return false;
     }
-  }
-
-  wipeSave(): void {
-    this.wiped = true;
-    localStorage.removeItem(SAVE_KEY);
   }
 }
 

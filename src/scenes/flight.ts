@@ -1035,12 +1035,14 @@ export class FlightScene implements GameScene {
       }
 
       // Particles hug the hull and stream downstream (-vAir); a shower marks
-      // a part burning away.
+      // a part burning away. Embers need genuinely HOT skin — a max-Q climb
+      // warms the hull but doesn't ablate it, so ascents stay clean.
       const leadTop = vAirHat
         ? _v4.set(0, 1, 0).applyQuaternion(v.q).dot(vAirHat) > 0
         : false;
       const downstream = vAirHat ? _v2.copy(vAirHat).negate() : null;
-      const rate = Math.min(700, Math.max(0, (heat - 6) * 9));
+      const ember = THREE.MathUtils.clamp((v.skinTemp - 550) / 250, 0, 1);
+      const rate = Math.min(700, Math.max(0, (heat - 25) * 9)) * ember;
       if (this.pendingBurst && downstream) {
         this.particles.burst(90, v.q, this.rocketHeight, leadTop, downstream);
         this.pendingBurst = false;
