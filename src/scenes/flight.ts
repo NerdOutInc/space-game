@@ -8,6 +8,7 @@ import {
   updateAtmosphereSun,
 } from '../render/atmosphere';
 import { Navball } from '../render/navball';
+import { ReentryParticles } from '../render/particles';
 import { buildFlame, buildRocketVisual } from '../render/rocketMesh';
 import { makeBodyTexture, makeDotTexture, makeStarfield } from '../render/textures';
 import { Controls, Simulation } from '../sim/simulation';
@@ -70,6 +71,9 @@ export class FlightScene implements GameScene {
   private flame: THREE.Mesh;
   private boosterFlames: THREE.Mesh[] = [];
   private plasma: THREE.Mesh;
+  private particles = new ReentryParticles();
+  private partGroups: THREE.Group[] = [];
+  private pendingBurst = false;
   private rocketHeight = 0;
   private lastOwnSig = -1;
   private pad: THREE.Mesh;
@@ -170,6 +174,7 @@ export class FlightScene implements GameScene {
     (this.plasma.material as THREE.MeshBasicMaterial).opacity = 0.5;
     this.plasma.visible = false;
     this.scene.add(this.plasma);
+    this.scene.add(this.particles.points);
     this.scene.add(this.rocketHolder);
     this.rebuildRocket();
 
@@ -362,6 +367,7 @@ export class FlightScene implements GameScene {
     $('pause-menu').classList.add('hidden');
     AUDIO.setEngineLevel(0);
     AUDIO.setChuteLevel(0);
+    this.particles.dispose();
     this.navball.dispose();
     // This scene is per-flight: free GPU resources when leaving it.
     for (const scene of [this.scene, this.mapScene]) {
@@ -673,6 +679,25 @@ export class FlightScene implements GameScene {
     this.debris.push({ group, body: this.vessel.body, pos, vel, age: 0 });
   }
 
+  /**
+   * Emissive tint on part meshes: strongest on the part meeting the airflow,
+   * halving per part up the stack — so you can SEE what's taking the heat.
+   */
+  private applyHeatGlow(vAirHat: THREE.Vector3 | null, leadTop: boolean): void {
+    const v = this.vessel;
+    const g0 = THREE.MathUtils.clamp((v.skinTemp - 430) / 800, 0, 1);
+    const side = vAirHat === null;
+    const n = this.partGroups.length;
+    for (let i = 0; i < n; i++) {
+      const dist = side ? 1.5 : leadTop ? i : n - 1 - i;
+      const f = g0 * Math.pow(0.5, dist);
+      this.partGroups[i]?.traverse((o) => {
+        const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+        if (m && m.emissive) m.emissive.setRGB(f, f * 0.22, f * 0.05);
+      });
+    }
+  }
+
   private dropNearby(o: Vessel): void {
     const vis = this.nearby.get(o);
     if (!vis) return;
@@ -682,11 +707,12 @@ export class FlightScene implements GameScene {
 
   private rebuildRocket(): void {
     this.rocketHolder.clear();
-    const { group, height, boosterMounts } = buildRocketVisual(this.vessel.parts, [
-      ...this.vessel.boosters,
-      ...this.vessel.radialChutes,
-    ]);
+    const { group, height, boosterMounts, partGroups } = buildRocketVisual(
+      this.vessel.parts,
+      [...this.vessel.boosters, ...this.vessel.radialChutes],
+    );
     this.rocketHeight = height;
+    this.partGroups = partGroups;
     this.rocketHolder.add(group);
     this.flame.position.y = -height / 2;
     this.rocketHolder.add(this.flame);
@@ -711,7 +737,7 @@ export class FlightScene implements GameScene {
     if (this.paused) {
       // Frozen physics; camera still responds so you can look around.
       if (this.mode === 'flight') {
-        this.syncFlight();
+        this.syncFlight(0);
         this.host.renderer.render(this.scene, this.camera);
       } else {
         this.syncMap();
@@ -739,7 +765,10 @@ export class FlightScene implements GameScene {
     let rem = dt;
     while (rem > 1e-6) {
       const chunk = Math.min(rem, 0.05);
-      for (const m of this.sim.step(chunk, ctrl)) this.toast(m);
+      for (const m of this.sim.step(chunk, ctrl)) {
+        this.toast(m);
+        if (m.includes('burned up') || m.includes('overheated')) this.pendingBurst = true;
+      }
       rem -= chunk;
     }
     STATE.advanceInactive(STATE.t - t0, v);
@@ -798,7 +827,7 @@ export class FlightScene implements GameScene {
     }
 
     if (this.mode === 'flight') {
-      this.syncFlight();
+      this.syncFlight(dt);
       this.host.renderer.render(this.scene, this.camera);
     } else {
       this.syncMap();
@@ -870,7 +899,7 @@ export class FlightScene implements GameScene {
 
   // ---------------- flight-view sync ----------------
 
-  private syncFlight(): void {
+  private syncFlight(dt: number): void {
     const v = this.vessel;
     const t = this.sim.t;
 
@@ -978,10 +1007,11 @@ export class FlightScene implements GameScene {
       (this.stars.material as THREE.PointsMaterial).opacity = 0.95;
     }
 
-    // Reentry plasma: glows when rho·v³ heating gets serious, streaming aft
+    // Reentry effects: plasma cone, skin particles, and part heat glow
     {
       const atmo2 = v.body.atmosphere;
       let heat = 0;
+      let vAirHat: THREE.Vector3 | null = null;
       if (atmo2 && alt < atmo2.height && !v.landed && !v.destroyed) {
         const rho = atmo2.rho0 * Math.exp(-Math.max(0, alt) / atmo2.scaleHeight);
         _spin.set(0, v.body.spinRate, 0);
@@ -989,14 +1019,14 @@ export class FlightScene implements GameScene {
         const va = vAir.length();
         heat = 2e-6 * rho * va * va * va;
         if (heat > 10 && va > 30) {
-          vAir.divideScalar(va);
+          vAirHat = vAir.divideScalar(va); // = _v3
           this.plasma.visible = true;
           const s = Math.min(1.6, 0.35 + heat / 120);
           this.plasma.scale.set(3.2 * s, 4.5 * s, 3.2 * s);
-          this.plasma.position.copy(vAir).multiplyScalar(this.rocketHeight * 0.3);
+          this.plasma.position.copy(vAirHat).multiplyScalar(this.rocketHeight * 0.3);
           this.plasma.quaternion.setFromUnitVectors(
             _v4.set(0, -1, 0),
-            _v2.copy(vAir).negate(),
+            _v2.copy(vAirHat).negate(),
           );
           (this.plasma.material as THREE.MeshBasicMaterial).opacity =
             0.25 + Math.min(0.5, heat / 250);
@@ -1006,6 +1036,29 @@ export class FlightScene implements GameScene {
       } else {
         this.plasma.visible = false;
       }
+
+      // Particles hug the hull and stream downstream (-vAir); a shower marks
+      // a part burning away.
+      const leadTop = vAirHat
+        ? _v4.set(0, 1, 0).applyQuaternion(v.q).dot(vAirHat) > 0
+        : false;
+      const downstream = vAirHat ? _v2.copy(vAirHat).negate() : null;
+      const rate = Math.min(700, Math.max(0, (heat - 6) * 9));
+      if (this.pendingBurst && downstream) {
+        this.particles.burst(90, v.q, this.rocketHeight, leadTop, downstream);
+        this.pendingBurst = false;
+      }
+      this.particles.update(
+        dt,
+        vAirHat ? rate : 0,
+        v.q,
+        this.rocketHeight,
+        leadTop,
+        downstream,
+      );
+
+      // Leading parts blush red as the skin heats
+      this.applyHeatGlow(vAirHat, leadTop);
     }
 
     // Camera: orbit around the vessel, "up" = away from the planet

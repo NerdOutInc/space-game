@@ -13,6 +13,8 @@ export interface RocketVisual {
   height: number;
   /** One entry per radial booster, in input order. */
   boosterMounts: BoosterMount[];
+  /** Per-stack-part mesh groups (index-aligned with the parts array). */
+  partGroups: THREE.Group[];
 }
 
 function metal(color: number, rough = 0.55): THREE.MeshStandardMaterial {
@@ -200,6 +202,7 @@ export function buildRocketVisual(
   const group = new THREE.Group();
   const height = parts.reduce((s, p) => s + p.def.height, 0);
   const centerY: number[] = new Array(parts.length).fill(0);
+  const partGroups: THREE.Group[] = new Array(parts.length);
   let y = -height / 2;
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
@@ -207,6 +210,7 @@ export function buildRocketVisual(
     centerY[i] = y + p.def.height / 2;
     mesh.position.y = centerY[i];
     group.add(mesh);
+    partGroups[i] = mesh;
     y += p.def.height;
   }
 
@@ -232,7 +236,7 @@ export function buildRocketVisual(
       z: Math.sin(a) * offset,
     });
   }
-  return { group, height, boosterMounts };
+  return { group, height, boosterMounts, partGroups };
 }
 
 /** Additive exhaust cone; scale/flicker it from the flight scene. */
