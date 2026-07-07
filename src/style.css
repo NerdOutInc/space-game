@@ -113,9 +113,29 @@ body {
   position: absolute;
   left: 18px;
   top: 18px;
-  bottom: 18px;
+  /* leave room for the help box below — the palette itself scrolls */
+  bottom: 175px;
   width: 250px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* visible, subtle scrollbars for the scrolling panels */
+#part-palette::-webkit-scrollbar,
+#stack-panel::-webkit-scrollbar,
+#missions-panel::-webkit-scrollbar {
+  width: 8px;
+}
+#part-palette::-webkit-scrollbar-thumb,
+#stack-panel::-webkit-scrollbar-thumb,
+#missions-panel::-webkit-scrollbar-thumb {
+  background: rgba(127, 212, 255, 0.25);
+  border-radius: 4px;
+}
+#part-palette::-webkit-scrollbar-track,
+#stack-panel::-webkit-scrollbar-track,
+#missions-panel::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .part-btn {
@@ -332,6 +352,18 @@ body {
 }
 #hud-top #hud-warp {
   color: var(--warn);
+}
+#hud-temp.warm {
+  color: var(--warn);
+}
+#hud-temp.hot {
+  color: var(--bad);
+  animation: temp-blink 0.6s steps(2) infinite;
+}
+@keyframes temp-blink {
+  50% {
+    opacity: 0.45;
+  }
 }
 
 #toast-area {

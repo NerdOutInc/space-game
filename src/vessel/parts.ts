@@ -7,7 +7,8 @@ export type PartType =
   | 'decoupler'
   | 'parachute'
   | 'srb'
-  | 'dock';
+  | 'dock'
+  | 'shield';
 
 export interface PartDef {
   id: string;
@@ -54,6 +55,16 @@ export const PARTS: PartDef[] = [
     radius: 0.625,
     info: 'Magnetic docking port — put it on TOP. Approach another port nose-first, slowly; magnets do the rest. U undocks.',
     cost: 40,
+  },
+  {
+    id: 'shield',
+    name: 'AB-7 Heat Shield',
+    type: 'shield',
+    dryMass: 300,
+    height: 0.35,
+    radius: 0.72,
+    info: 'Ablative dish. Mount at the END that meets the airflow (usually the bottom) — it soaks up reentry heat that would cook anything else.',
+    cost: 30,
   },
   {
     id: 'tank-small',

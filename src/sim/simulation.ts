@@ -17,6 +17,17 @@ const ANG_ACCEL = 1.2; // rad/s^2 from reaction wheels
 const MAX_ANG_VEL = 2.0;
 const SAFE_LANDING_SPEED = 15; // m/s
 
+// ---- aero-thermal tuning ----
+const HEAT_K = 2e-6; // skin heating ~ K * rho * v^3  (K/s)
+const HEAT_COOL = 0.15; // 1/s decay toward ambient
+const AMBIENT_K = 260;
+const TEMP_TOL = 1100; // K — ordinary parts start burning off
+const TEMP_TOL_SHIELD = 2600; // K — when a heat shield takes the airflow
+const SHIELD_FACTOR = 0.12; // heating multiplier behind a leading shield
+const CHUTE_RIP_Q = 18_000; // Pa — deployed canopies tear above this
+const CHUTE_SAFE_Q = 12_000; // Pa — armed chutes wait for less than this
+const CHUTE_SAFE_V = 320; // m/s — ...and subsonic-ish airspeed
+
 const _t1 = new THREE.Vector3();
 const _t2 = new THREE.Vector3();
 const _t3 = new THREE.Vector3();
@@ -245,21 +256,7 @@ export class Simulation {
       msgs.push('Flameout — stage out of propellant');
     }
 
-    // Armed parachutes pop automatically once it's safe-ish: in atmosphere,
-    // below 40 km, and descending.
-    if (b.atmosphere && alt < 40_000 && v.pos.dot(v.vel) < 0) {
-      let popped = 0;
-      for (const p of v.allChutes()) {
-        if (p.armed && !p.deployed) {
-          p.deployed = true;
-          p.armed = false;
-          popped++;
-        }
-      }
-      if (popped > 0) msgs.push(`Parachute${popped > 1 ? 's' : ''} deployed!`);
-    }
-
-    // Drag (relative to the co-rotating atmosphere)
+    // Drag (relative to the co-rotating atmosphere) + aero-thermal effects
     if (rho > 0) {
       _spin.set(0, b.spinRate, 0);
       _t2.crossVectors(_spin, v.pos); // atmosphere velocity
@@ -267,8 +264,11 @@ export class Simulation {
       const va = _t3.length();
       if (va > 0.1) {
         _acc.addScaledVector(_t3, (-0.5 * rho * va * v.dragArea()) / m);
+        this.aeroThermal(h, rho, va, _t3, alt, msgs);
       }
     }
+    // Radiate heat away everywhere (space included)
+    v.skinTemp += (AMBIENT_K - v.skinTemp) * Math.min(1, HEAT_COOL * h);
 
     v.vel.addScaledVector(_acc, h);
     v.pos.addScaledVector(v.vel, h);
@@ -290,6 +290,77 @@ export class Simulation {
       v.q.premultiply(_dq).normalize();
     }
     v.angVel.set(0, 0, 0);
+  }
+
+  /**
+   * Parachute aerodynamics and reentry heating.
+   * Heating ~ rho·v³ on the vessel skin; a heat shield on the end facing
+   * the airflow absorbs most of it and tolerates far higher temperatures.
+   * Sustained overheating burns parts off the leading end.
+   */
+  private aeroThermal(
+    h: number,
+    rho: number,
+    va: number,
+    vAir: THREE.Vector3,
+    alt: number,
+    msgs: string[],
+  ): void {
+    const v = this.vessel;
+    const qDyn = 0.5 * rho * va * va;
+    const descending = v.pos.dot(v.vel) < 0;
+
+    for (const c of v.allChutes()) {
+      if (c.deployed) {
+        c.inflate = Math.min(1, (c.inflate ?? 1) + h / 2.5);
+        if (qDyn > CHUTE_RIP_Q) {
+          c.deployed = false;
+          c.torn = true;
+          msgs.push('Parachute torn away by the airstream!');
+        }
+      } else if (
+        c.armed &&
+        descending &&
+        alt < 40_000 &&
+        qDyn < CHUTE_SAFE_Q &&
+        va < CHUTE_SAFE_V
+      ) {
+        c.deployed = true;
+        c.armed = false;
+        c.inflate = 0.05;
+        msgs.push('Parachute deployed!');
+      }
+    }
+
+    if (va < 30) return; // negligible heating
+    // Which end of the stack meets the airflow?
+    const upDot = _up.set(0, 1, 0).applyQuaternion(v.q).dot(vAir) / va;
+    const first = v.parts[0];
+    const last = v.parts[v.parts.length - 1];
+    const shieldLeads =
+      (upDot < -0.3 && last?.def.type === 'shield') ||
+      (upDot > 0.3 && first?.def.type === 'shield');
+    let heat = HEAT_K * rho * va * va * va;
+    if (shieldLeads) heat *= SHIELD_FACTOR;
+    v.skinTemp += heat * h;
+
+    const tol = shieldLeads ? TEMP_TOL_SHIELD : TEMP_TOL;
+    if (v.skinTemp > tol) {
+      v.overheatT += h;
+      if (v.overheatT > 1.2) {
+        v.overheatT = 0;
+        const res = v.burnOffLeading(upDot > 0.3);
+        if (res) {
+          msgs.push(
+            res.fatal
+              ? `${res.name} overheated — vessel destroyed!`
+              : `${res.name} burned up!`,
+          );
+        }
+      }
+    } else if (v.overheatT > 0) {
+      v.overheatT = Math.max(0, v.overheatT - h);
+    }
   }
 
   private applyAttitude(h: number, ctrl: Controls): void {

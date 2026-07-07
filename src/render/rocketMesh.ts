@@ -160,6 +160,23 @@ function buildPartMesh(def: PartDef, deployed: boolean): THREE.Group {
       g.add(ring);
       break;
     }
+    case 'shield': {
+      // ablative dish: tan structural top, scorched-brown curved bottom
+      const top = new THREE.Mesh(
+        new THREE.CylinderGeometry(r, r * 1.04, h * 0.45, 24),
+        metal(0xc8b08a, 0.7),
+      );
+      top.position.y = h * 0.2;
+      g.add(top);
+      const dish = new THREE.Mesh(
+        new THREE.SphereGeometry(r * 1.06, 24, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
+        new THREE.MeshStandardMaterial({ color: 0x3a2c22, roughness: 0.95 }),
+      );
+      dish.scale.y = 0.55;
+      dish.position.y = h * 0.05;
+      g.add(dish);
+      break;
+    }
     case 'decoupler': {
       const band = new THREE.Mesh(
         new THREE.CylinderGeometry(r * 1.02, r * 1.02, h, 24),

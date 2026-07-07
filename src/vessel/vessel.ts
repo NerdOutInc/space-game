@@ -17,6 +17,10 @@ export interface PartInstance {
   deployed: boolean;
   /** Parachutes: staged and waiting for safe atmosphere conditions. */
   armed: boolean;
+  /** Parachutes: shredded by dynamic pressure — gone for good. */
+  torn?: boolean;
+  /** Parachutes: canopy inflation 0..1 (drag ramps up over a few seconds). */
+  inflate?: number;
 }
 
 /** A radially-attached side booster, tied to a stack part by index. */
@@ -66,6 +70,10 @@ export class Vessel {
   sas = true;
   landed = true;
   destroyed = false;
+  /** Aero-thermal skin temperature, K (ambient ~290). */
+  skinTemp = 290;
+  /** Seconds spent above the tolerance — parts burn off when it accumulates. */
+  overheatT = 0;
   /** Has this vessel ever left the atmosphere? (drives the recovery bonus) */
   reachedSpace = false;
   /** Surface-fixed unit direction of the landing spot (body frame). */
@@ -94,12 +102,41 @@ export class Vessel {
     this.body = body;
   }
 
-  /** All parachutes: stack-mounted plus radial. */
+  /** All usable parachutes (stack + radial, excluding torn ones). */
   allChutes(): PartInstance[] {
     return [
       ...this.parts.filter((p) => p.def.type === 'parachute'),
       ...this.radialChutes,
-    ];
+    ].filter((p) => !p.torn);
+  }
+
+  /**
+   * Reentry burn-off: destroy the part on the end that faces the airflow.
+   * Losing the capsule (or the last part) is fatal for the vessel.
+   */
+  burnOffLeading(top: boolean): { name: string; fatal: boolean } | null {
+    if (this.parts.length === 0) return null;
+    const idx = top ? 0 : this.parts.length - 1;
+    const part = this.parts[idx];
+    if (part.def.type === 'capsule' || this.parts.length === 1) {
+      this.destroyed = true;
+      return { name: part.def.name, fatal: true };
+    }
+    if (top) {
+      this.parts.shift();
+      this.boosters = this.boosters
+        .map((b) => ({ ...b, hostIndex: b.hostIndex - 1 }))
+        .filter((b) => b.hostIndex >= 0);
+      this.radialChutes = this.radialChutes
+        .map((c) => ({ ...c, hostIndex: c.hostIndex - 1 }))
+        .filter((c) => c.hostIndex >= 0);
+    } else {
+      this.parts.pop();
+      const n = this.parts.length;
+      this.boosters = this.boosters.filter((b) => b.hostIndex < n);
+      this.radialChutes = this.radialChutes.filter((c) => c.hostIndex < n);
+    }
+    return { name: part.def.name, fatal: false };
   }
 
   hasFreeDock(): boolean {
@@ -178,7 +215,7 @@ export class Vessel {
     let cda = 1.5; // rough Cd*A for the whole stack
     cda += this.boosters.length * 0.5 + this.radialChutes.length * 0.2;
     for (const p of this.allChutes()) {
-      if (p.deployed) cda += 380;
+      if (p.deployed) cda += 380 * (p.inflate ?? 1); // canopies take time to fill
     }
     return cda;
   }
@@ -361,6 +398,7 @@ export class Vessel {
     for (const c of chutes) {
       c.deployed = true;
       c.armed = false;
+      c.inflate = 0.05;
     }
     return true;
   }

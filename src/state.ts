@@ -37,6 +37,7 @@ interface SavedPart {
   ignited: boolean;
   deployed: boolean;
   armed?: boolean;
+  torn?: boolean;
 }
 
 interface SavedBooster {
@@ -49,6 +50,7 @@ interface SavedRadialChute {
   hostIndex: number;
   deployed: boolean;
   armed: boolean;
+  torn?: boolean;
 }
 
 interface SavedVessel {
@@ -248,6 +250,7 @@ export class GameState {
           ignited: p.ignited,
           deployed: p.deployed,
           armed: p.armed,
+          torn: p.torn,
         })),
         boosters: v.boosters.map((b) => ({
           hostIndex: b.hostIndex,
@@ -258,6 +261,7 @@ export class GameState {
           hostIndex: c.hostIndex,
           deployed: c.deployed,
           armed: c.armed,
+          torn: c.torn,
         })),
         docked: v.dockedWith ? this.vessels.indexOf(v.dockedWith) : -1,
       })),
@@ -316,6 +320,7 @@ export class GameState {
             ignited: p.ignited,
             deployed: p.deployed,
             armed: p.armed ?? false,
+            torn: p.torn ?? false,
           }));
         v.boosters = (sv.boosters ?? []).map((b) => ({
           def: srb,
@@ -331,6 +336,7 @@ export class GameState {
           ignited: false,
           deployed: c.deployed,
           armed: c.armed,
+          torn: c.torn ?? false,
           hostIndex: c.hostIndex,
         }));
         this.vessels.push(v);

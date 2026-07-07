@@ -20,7 +20,7 @@ import {
 import { computeStageStats, describeStages } from '../vessel/vessel';
 
 const CATEGORIES: Array<{ label: string; types: string[] }> = [
-  { label: 'Command & Recovery', types: ['capsule', 'parachute', 'dock'] },
+  { label: 'Command & Recovery', types: ['capsule', 'parachute', 'dock', 'shield'] },
   { label: 'Propulsion', types: ['tank', 'engine', 'srb'] },
   { label: 'Structural', types: ['decoupler'] },
 ];

@@ -63,8 +63,9 @@ export class FlightScene implements GameScene {
   private rocketHolder = new THREE.Group();
   private flame: THREE.Mesh;
   private boosterFlames: THREE.Mesh[] = [];
+  private plasma: THREE.Mesh;
   private rocketHeight = 0;
-  private lastChutes = 0;
+  private lastOwnSig = -1;
   private pad: THREE.Mesh;
   private debris: Debris[] = [];
   /** Nearby vessels rendered in the flight view (docking partners etc.). */
@@ -156,6 +157,12 @@ export class FlightScene implements GameScene {
     }
 
     this.flame = buildFlame();
+    // reentry plasma sheath (oriented along the airflow while it glows)
+    this.plasma = buildFlame();
+    (this.plasma.material as THREE.MeshBasicMaterial).color.set(0xff7a30);
+    (this.plasma.material as THREE.MeshBasicMaterial).opacity = 0.5;
+    this.plasma.visible = false;
+    this.scene.add(this.plasma);
     this.scene.add(this.rocketHolder);
     this.rebuildRocket();
 
@@ -742,12 +749,15 @@ export class FlightScene implements GameScene {
       this.rebuildRocket();
     }
 
-    // Parachute events: opening snap + rebuild for the canopy (covers both
-    // manual deploys and armed chutes popped by the sim).
+    // Rebuild the visual when the craft changes shape: staging is handled
+    // above, but chute deploys/tears and reentry burn-offs happen in the sim.
     const chutes = v.deployedChutes();
-    if (chutes !== this.lastChutes) {
-      if (chutes > this.lastChutes) AUDIO.playOneShot('chuteOpen', 0.9);
-      this.lastChutes = chutes;
+    const ownSig =
+      v.parts.length * 10_000 + v.boosters.length * 100 + chutes * 10 + v.allChutes().length;
+    if (ownSig !== this.lastOwnSig) {
+      const prevChutes = Math.floor((this.lastOwnSig % 100) / 10);
+      if (this.lastOwnSig >= 0 && chutes > prevChutes) AUDIO.playOneShot('chuteOpen', 0.9);
+      this.lastOwnSig = ownSig;
       this.rebuildRocket();
     }
 
@@ -962,6 +972,36 @@ export class FlightScene implements GameScene {
       (this.stars.material as THREE.PointsMaterial).opacity = 0.95;
     }
 
+    // Reentry plasma: glows when rho·v³ heating gets serious, streaming aft
+    {
+      const atmo2 = v.body.atmosphere;
+      let heat = 0;
+      if (atmo2 && alt < atmo2.height && !v.landed && !v.destroyed) {
+        const rho = atmo2.rho0 * Math.exp(-Math.max(0, alt) / atmo2.scaleHeight);
+        _spin.set(0, v.body.spinRate, 0);
+        const vAir = _v3.copy(v.vel).sub(_v4.crossVectors(_spin, v.pos));
+        const va = vAir.length();
+        heat = 2e-6 * rho * va * va * va;
+        if (heat > 10 && va > 30) {
+          vAir.divideScalar(va);
+          this.plasma.visible = true;
+          const s = Math.min(1.6, 0.35 + heat / 120);
+          this.plasma.scale.set(3.2 * s, 4.5 * s, 3.2 * s);
+          this.plasma.position.copy(vAir).multiplyScalar(this.rocketHeight * 0.3);
+          this.plasma.quaternion.setFromUnitVectors(
+            _v4.set(0, -1, 0),
+            _v2.copy(vAir).negate(),
+          );
+          (this.plasma.material as THREE.MeshBasicMaterial).opacity =
+            0.25 + Math.min(0.5, heat / 250);
+        } else {
+          this.plasma.visible = false;
+        }
+      } else {
+        this.plasma.visible = false;
+      }
+    }
+
     // Camera: orbit around the vessel, "up" = away from the planet
     const up = _v2.copy(v.pos).normalize();
     _spin.set(0, v.body.spinRate, 0);
@@ -1161,6 +1201,9 @@ export class FlightScene implements GameScene {
     $('hud-met').textContent =
       v.launchedAt !== null ? `T+ ${fmtTime(this.sim.t - v.launchedAt)}` : 'PRE-LAUNCH';
     $('hud-warp').textContent = `${this.sim.warp}×`;
+    const temp = $('hud-temp');
+    temp.textContent = `${Math.round(v.skinTemp)} K`;
+    temp.className = v.skinTemp > 950 ? 'hot' : v.skinTemp > 600 ? 'warm' : '';
 
     $('throttle-pct').textContent = `${Math.round(v.throttle * 100)}%`;
     $('throttle-fill').style.width = `${v.throttle * 100}%`;

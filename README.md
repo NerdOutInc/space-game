@@ -119,6 +119,18 @@ any vessel in your SOI:
 All programs stage automatically, ignite engines when they need thrust,
 and manage time warp themselves.
 
+### Reentry heat & parachute physics
+
+Flying fast through atmosphere heats the skin (~ρ·v³ — watch the TEMP
+readout). Past ~1100 K, parts start burning off the end that faces the
+airflow; lose the capsule and the flight is over. The **AB-7 Heat Shield**
+soaks up reentry heat when it leads the airflow (hold retrograde so it
+does) and tolerates ~2600 K — a must for steep or high-speed entries, with
+a plasma sheath to show you're committed. Parachutes now inflate over a
+few seconds, tear off above ~18 kPa of dynamic pressure, and **armed**
+chutes wait until the air is survivable (subsonic and below ~12 kPa)
+before popping — so arm them and forget them.
+
 ### Career: science & unlocks
 
 Exploration firsts earn **science** (✦): breaking 10 km, reaching space,
