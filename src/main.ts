@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import './style.css';
+import { AUDIO } from './audio';
 import { GameHost, GameScene } from './host';
 import { FlightScene } from './scenes/flight';
+import { MenuScene } from './scenes/menu';
 import { VABScene } from './scenes/vab';
 import { STATE } from './state';
 import { HOME } from './universe/bodies';
@@ -43,6 +45,11 @@ class Game implements GameHost {
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => this.keys.clear());
+    // Audio contexts need a user gesture before they can make sound.
+    const unlock = () => AUDIO.unlock();
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+    AUDIO.bindSliders('pv-music', 'pv-sfx');
   }
 
   private switchTo(scene: GameScene): void {
@@ -85,7 +92,7 @@ class Game implements GameHost {
   }
 
   start(): void {
-    this.toVAB();
+    this.switchTo(new MenuScene(this));
     let lastStep = performance.now();
     const step = () => {
       lastStep = performance.now();

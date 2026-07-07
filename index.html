@@ -8,6 +8,20 @@
   <body>
     <canvas id="game-canvas"></canvas>
 
+    <!-- ============ MAIN MENU ============ -->
+    <div id="menu-ui" class="ui hidden">
+      <div id="menu-box">
+        <h1>ZENITH<br /><span>SPACE PROGRAM</span></h1>
+        <p class="menu-tag">Build a rocket. Escape the sky. Bring them home.</p>
+        <button id="menu-start" class="btn launch">▲ &nbsp;ENTER THE VAB</button>
+        <div class="menu-settings panel">
+          <h3>Sound</h3>
+          <label>MUSIC <input type="range" id="vol-music" min="0" max="100" /></label>
+          <label>EFFECTS <input type="range" id="vol-sfx" min="0" max="100" /></label>
+        </div>
+      </div>
+    </div>
+
     <!-- ============ VAB (builder) ============ -->
     <div id="vab-ui" class="ui hidden">
       <div class="vab-title">VEHICLE ASSEMBLY<br /><span>Zenith Space Program</span></div>
@@ -69,7 +83,8 @@
           <button class="btn" id="btn-map">MAP&nbsp;M</button>
           <button class="btn" id="btn-warp-down">◀&nbsp;WARP</button>
           <button class="btn" id="btn-warp-up">WARP&nbsp;▶</button>
-          <button class="btn" id="btn-ap">AUTO&nbsp;⏵&nbsp;100&nbsp;KM</button>
+          <button class="btn" id="btn-ap">AUTO&nbsp;⏵</button>
+          <label class="ap-target">TARGET <input type="number" id="ap-alt" value="100" min="1" step="25" /> km</label>
         </div>
         <div class="keys">
           <b>Shift/Ctrl</b> throttle · <b>Z/X</b> full/cut · <b>Space</b> ignite/stage<br />
@@ -80,6 +95,12 @@
       </div>
       <div id="map-info" class="panel hidden"></div>
       <div id="map-labels"></div>
+      <div id="debug-panel" class="panel hidden">
+        <h3>Debug <span class="hint">` to close</span></h3>
+        <label>Body <select id="debug-body"></select></label>
+        <label>Altitude <input type="number" id="debug-alt" value="100" min="1" /> km</label>
+        <button class="btn" id="debug-set">PLACE IN ORBIT</button>
+      </div>
       <div id="navball-ui">
         <div id="nb-readout">
           <span id="nb-hdg">HDG —</span><span id="nb-pit">PIT 90°</span>
@@ -107,6 +128,10 @@
           <button class="btn" id="pause-recover">Recover vessel</button>
           <button class="btn" id="pause-tovab">Return to VAB (flight continues)</button>
           <button class="btn danger" id="pause-terminate">Terminate flight</button>
+        </div>
+        <div class="pause-vol">
+          <label>MUSIC <input type="range" id="pv-music" min="0" max="100" /></label>
+          <label>EFFECTS <input type="range" id="pv-sfx" min="0" max="100" /></label>
         </div>
       </div>
     </div>

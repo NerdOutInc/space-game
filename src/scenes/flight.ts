@@ -1,6 +1,8 @@
 import * as THREE from 'three';
+import { AUDIO } from '../audio';
 import { GameHost, GameScene } from '../host';
 import { orbitalElements, sampleOrbit } from '../math/kepler';
+import { addAtmosphereShell } from '../render/atmosphere';
 import { Navball } from '../render/navball';
 import { buildFlame, buildRocketVisual } from '../render/rocketMesh';
 import { makeBodyTexture, makeDotTexture, makeStarfield } from '../render/textures';
@@ -123,6 +125,7 @@ export class FlightScene implements GameScene {
             metalness: 0,
           }),
         );
+        addAtmosphereShell(mesh, body);
       }
       this.bodyMeshes.set(body, mesh);
       this.scene.add(mesh);
@@ -148,6 +151,34 @@ export class FlightScene implements GameScene {
         new THREE.SphereGeometry(Math.max(body.radius * MAP_SCALE, 0.02), 32, 16),
         new THREE.MeshBasicMaterial({ color: body.color }),
       );
+      if (body.atmosphere) {
+        const atmoR = Math.max((body.radius + body.atmosphere.height) * MAP_SCALE, 0.024);
+        const haze = new THREE.Mesh(
+          new THREE.SphereGeometry(atmoR, 32, 16),
+          new THREE.MeshBasicMaterial({
+            color: body.atmosphere.skyColor,
+            transparent: true,
+            opacity: 0.45,
+            depthWrite: false,
+          }),
+        );
+        mesh.add(haze);
+        // Crisp ring marking the exact edge of the atmosphere (where drag ends)
+        const ringPts: THREE.Vector3[] = [];
+        for (let i = 0; i <= 96; i++) {
+          const a = (i / 96) * Math.PI * 2;
+          ringPts.push(new THREE.Vector3(Math.cos(a) * atmoR, 0, Math.sin(a) * atmoR));
+        }
+        const ring = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(ringPts),
+          new THREE.LineBasicMaterial({
+            color: body.atmosphere.skyColor,
+            transparent: true,
+            opacity: 0.7,
+          }),
+        );
+        mesh.add(ring);
+      }
       this.mapScene.add(mesh);
       const marker = new THREE.Sprite(
         new THREE.SpriteMaterial({ map: dot, color: body.color, depthTest: false }),
@@ -254,6 +285,21 @@ export class FlightScene implements GameScene {
     $('end-vab').onclick = () => this.host.removeVessel(this.vessel);
     $('map-labels').style.display = 'none';
     $('map-info').classList.add('hidden');
+    AUDIO.playMusic('cosmic');
+
+    // Debug panel (toggle with `)
+    const sel = $('debug-body') as HTMLSelectElement;
+    if (sel.options.length === 0) {
+      for (const b of BODIES) {
+        const opt = document.createElement('option');
+        opt.value = b.name;
+        opt.textContent = b.name;
+        if (b.name === 'Luna') opt.selected = true;
+        sel.appendChild(opt);
+      }
+    }
+    $('debug-set').onclick = () => this.debugSetOrbit();
+    $('debug-panel').classList.add('hidden');
     if (this.vessel.launchedAt === null) {
       this.toast(`${this.vessel.name} on the pad — SPACE to ignite, or G for autopilot`);
     } else {
@@ -270,6 +316,7 @@ export class FlightScene implements GameScene {
     canvas.removeEventListener('wheel', this.onWheel);
     $('map-labels').innerHTML = '';
     $('pause-menu').classList.add('hidden');
+    AUDIO.setEngineLevel(0);
     this.navball.dispose();
     // This scene is per-flight: free GPU resources when leaving it.
     for (const scene of [this.scene, this.mapScene]) {
@@ -365,16 +412,50 @@ export class FlightScene implements GameScene {
       case 'KeyR':
         this.host.revertVessel(this.vessel);
         break;
+      case 'Backquote':
+        $('debug-panel').classList.toggle('hidden');
+        break;
       case 'Escape':
         this.setPaused(true);
         break;
     }
   }
 
+  /** Debug tool: teleport the vessel into a circular orbit of any body. */
+  private debugSetOrbit(): void {
+    const v = this.vessel;
+    const sel = $('debug-body') as HTMLSelectElement;
+    const body = BODIES.find((b) => b.name === sel.value) ?? HOME;
+    const input = $('debug-alt') as HTMLInputElement;
+    let alt = parseFloat(input.value) * 1000;
+    const minAlt = (body.atmosphere?.height ?? 0) + 10_000;
+    if (!isFinite(alt) || alt < minAlt) {
+      alt = minAlt;
+      input.value = String(Math.round(alt / 1000));
+    }
+    if (this.sim.autopilot.active) this.sim.autopilot.disengage();
+    const r = body.radius + alt;
+    v.body = body;
+    v.landed = false;
+    v.destroyed = false;
+    v.throttle = 0;
+    v.pos.set(r, 0, 0);
+    v.vel.set(0, 0, -Math.sqrt(body.mu / r)); // prograde, same sense as the planets
+    v.q.setFromUnitVectors(_v1.set(0, 1, 0), _v2.set(1, 0, 0));
+    v.angVel.set(0, 0, 0);
+    if (v.launchedAt === null) v.launchedAt = this.sim.t;
+    this.sim.warp = 1;
+    this.endShown = false;
+    $('end-dialog').classList.add('hidden');
+    this.toast(`DEBUG: placed in ${Math.round(alt / 1000)} km orbit of ${body.name}`);
+  }
+
   private setPaused(p: boolean): void {
     this.paused = p;
     $('pause-menu').classList.toggle('hidden', !p);
     if (!p) return;
+    AUDIO.setEngineLevel(0);
+    AUDIO.syncSliders('pv-music', 'pv-sfx');
     $('pause-ut').textContent = `UT ${fmtTime(STATE.t)} · ${this.vessel.name}`;
     $('pause-resume').onclick = () => this.setPaused(false);
     $('pause-revert').onclick = () => this.host.revertVessel(this.vessel);
@@ -393,7 +474,19 @@ export class FlightScene implements GameScene {
   private toggleAutopilot(): void {
     if (this.vessel.destroyed) return;
     const ap = this.sim.autopilot;
-    this.toast(ap.active ? ap.disengage() : ap.engage());
+    if (ap.active) {
+      this.toast(ap.disengage());
+      return;
+    }
+    const input = $('ap-alt') as HTMLInputElement;
+    const minAlt = ((this.vessel.body.atmosphere?.height ?? 0) + 10_000) / 1000;
+    let target = parseFloat(input.value);
+    if (!isFinite(target) || target < minAlt) {
+      target = Math.max(minAlt, 100);
+      input.value = String(Math.round(target));
+    }
+    ap.targetAlt = target * 1000;
+    this.toast(ap.engage());
   }
 
   private doStage(): void {
@@ -515,6 +608,17 @@ export class FlightScene implements GameScene {
       $('end-msg').textContent =
         'The rocket met the ground with unreasonable enthusiasm. Revert to try that ascent again, or head back to the VAB for a redesign.';
       $('end-dialog').classList.remove('hidden');
+    }
+
+    // Engine audio follows thrust (also audible in map view)
+    {
+      const alt = v.pos.length() - v.body.radius;
+      const pr =
+        v.body.atmosphere && alt < v.body.atmosphere.height
+          ? Math.exp(-Math.max(0, alt) / v.body.atmosphere.scaleHeight)
+          : 0;
+      const thrust = v.destroyed ? 0 : v.totalThrust(pr);
+      AUDIO.setEngineLevel(thrust > 0 ? 0.35 + 0.65 * Math.min(1, thrust / 215_000) : 0);
     }
 
     if (this.mode === 'flight') {

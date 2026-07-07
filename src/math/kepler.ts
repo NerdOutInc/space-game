@@ -195,6 +195,31 @@ export function orbitalElements(
   return { a, e, inc, peR, apR, period, semiLatus, pHat, qHat, wHat, degenerate };
 }
 
+/**
+ * Seconds until the vessel reaches apoapsis. Null for hyperbolic, radial,
+ * or otherwise degenerate trajectories.
+ */
+export function timeToApoapsis(
+  r: THREE.Vector3,
+  v: THREE.Vector3,
+  mu: number,
+): number | null {
+  const el = orbitalElements(r, v, mu);
+  if (el.degenerate || el.e >= 1 || !isFinite(el.period)) return null;
+  const rn = r.length();
+  const cosTh = THREE.MathUtils.clamp(r.dot(el.pHat) / rn, -1, 1);
+  const sinTh = THREE.MathUtils.clamp(r.dot(el.qHat) / rn, -1, 1);
+  const theta = Math.atan2(sinTh, cosTh);
+  const e = el.e;
+  // true anomaly → eccentric anomaly → mean anomaly
+  const E = Math.atan2(Math.sqrt(1 - e * e) * Math.sin(theta), e + Math.cos(theta));
+  const M = E - e * Math.sin(E);
+  const n = (2 * Math.PI) / el.period;
+  let t = (Math.PI - M) / n;
+  if (t < 0) t += el.period;
+  return t;
+}
+
 export interface OrbitPath {
   points: THREE.Vector3[]; // body-centered inertial
   closed: boolean;

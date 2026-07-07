@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { orbitalElements } from '../math/kepler';
+import { orbitalElements, timeToApoapsis } from '../math/kepler';
+import type { Vessel } from '../vessel/vessel';
 import type { Simulation } from './simulation';
 
 const _up = new THREE.Vector3();
@@ -110,16 +111,19 @@ export class Autopilot {
         // Track horizontal prograde so we're aligned for the burn.
         _hd.copy(v.vel).addScaledVector(up, -v.vel.dot(up));
         if (_hd.lengthSq() > 1) this.desiredDir = _hd.clone().normalize();
-        const toAp = apAlt - alt;
-        if (toAp < 8000) {
+        // Time the burn like a pilot: start half the burn before apoapsis.
+        const tAp = timeToApoapsis(v.pos, v.vel, b.mu);
+        const burnT = this.circBurnTime(v, el.apR, el.semiLatus, b.mu);
+        if (tAp === null || tAp <= burnT / 2 + 2) {
           if (sim.warp > 1) sim.warp = 1;
           this.phase = 'circ';
-          msgs.push('Autopilot: circularization burn');
+          msgs.push(
+            `Autopilot: circularization burn (${Math.max(1, Math.round(burnT))} s)`,
+          );
         } else if (alt > atmoTop) {
-          // Warp through the coast, easing off as apoapsis approaches.
-          const desired = toAp > 20_000 ? 50 : 10;
-          if (sim.warp !== desired && sim.warp < desired) sim.warp = desired;
-          if (toAp <= 20_000 && sim.warp > 10) sim.warp = 10;
+          const margin = tAp - burnT / 2;
+          const desired = margin > 120 ? 50 : margin > 25 ? 10 : 1;
+          if (sim.warp !== desired) sim.warp = desired;
         }
         break;
       }
@@ -146,5 +150,18 @@ export class Autopilot {
       }
     }
     return msgs;
+  }
+
+  /** Estimated seconds of full-throttle burn to circularize at apoapsis. */
+  private circBurnTime(v: Vessel, apR: number, semiLatus: number, mu: number): number {
+    let thrust = 0;
+    for (const p of v.bottomGroup()) {
+      if (p.def.type === 'engine' || p.def.type === 'srb') thrust += p.def.thrust ?? 0;
+    }
+    if (thrust <= 0 || !isFinite(apR)) return 0;
+    const h = Math.sqrt(semiLatus * mu); // specific angular momentum
+    const vAtAp = h / apR;
+    const dv = Math.max(0, Math.sqrt(mu / apR) - vAtAp);
+    return dv / (thrust / v.mass());
   }
 }

@@ -40,7 +40,8 @@ npm run dev      # opens on http://localhost:5173
 | `Shift` / `Ctrl` | Throttle up / down (`Z` full, `X` cut) |
 | `W`/`S`, `A`/`D`, `Q`/`E` | Pitch, yaw, roll |
 | `T` | Toggle SAS (rotation damping) |
-| `G` | Toggle the ascent autopilot (flies to a ~100 km orbit) |
+| `G` | Toggle the ascent autopilot (target altitude set next to the AUTO button) |
+| `` ` `` | Debug panel — teleport into a circular orbit of any body |
 | `,` / `.` | Time warp down / up |
 | `M` | Toggle map view |
 | `P` | Deploy parachute |
@@ -66,10 +67,27 @@ be *recovered* from the pause menu.
 ### Autopilot
 
 Press `G` on the pad and the ship flies itself to orbit: ignition, an
-east-facing gravity turn, staging on flameout, a warped coast to apoapsis
-and a circularization burn (~160 × 95 km with the sample rocket). Watch the
-navball while it flies — that profile is exactly what you should imitate
-by hand.
+east-facing gravity turn, staging on flameout, a time-warped coast, and a
+circularization burn timed around apoapsis (Kepler time-to-Ap plus an
+estimated burn duration, starting half the burn early). The sample rocket
+reaches ~100 × 97 km against a 100 km target. Set a different target
+altitude in the box next to the AUTO button. Watch the navball while it
+flies — that profile is exactly what you should imitate by hand.
+
+### Sound & music
+
+Rocket engine audio follows your throttle; ambient music changes between
+the menu/flight ("cosmic glow") and the VAB ("dunes"). Volume sliders live
+on the main menu and in the pause menu (Esc); settings persist. Audio
+credits: freesound community.
+
+### Debug tools
+
+Press `` ` `` in flight to open the debug panel: pick any body and an
+altitude and the active vessel teleports into a perfect circular orbit
+(clamped above the atmosphere) — handy for testing moons and planets
+without flying the whole transfer. There's also a `window.__step(seconds)`
+console hook that advances the simulation deterministically.
 
 ## The Helios system
 

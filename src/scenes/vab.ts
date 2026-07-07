@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { AUDIO } from '../audio';
 import { GameHost, GameScene } from '../host';
 import { buildRocketVisual } from '../render/rocketMesh';
 import { STATE } from '../state';
@@ -48,6 +49,7 @@ export class VABScene implements GameScene {
 
   enter(): void {
     $('vab-ui').classList.remove('hidden');
+    AUDIO.playMusic('dunes');
     if (!this.bound) {
       this.bind();
       this.bound = true;

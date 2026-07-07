@@ -414,6 +414,127 @@ body {
   color: var(--accent);
 }
 
+/* ============ MAIN MENU ============ */
+
+#menu-box {
+  position: absolute;
+  top: 50%;
+  left: 10%;
+  transform: translateY(-50%);
+  max-width: 420px;
+}
+#menu-box h1 {
+  font-size: 54px;
+  letter-spacing: 0.28em;
+  line-height: 1.1;
+  text-shadow: 0 0 30px rgba(127, 212, 255, 0.5);
+}
+#menu-box h1 span {
+  font-size: 19px;
+  letter-spacing: 0.62em;
+  color: var(--accent);
+}
+.menu-tag {
+  margin: 14px 0 28px;
+  font-size: 12px;
+  color: #8a97a5;
+  letter-spacing: 0.1em;
+}
+#menu-start {
+  font-size: 16px;
+  padding: 14px 38px;
+  letter-spacing: 0.25em;
+  color: #052012;
+  background: var(--good);
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 0 26px rgba(125, 255, 168, 0.35);
+}
+#menu-start:hover {
+  background: #a4ffc4;
+}
+.menu-settings {
+  margin-top: 34px;
+  width: 300px;
+}
+.menu-settings label,
+.pause-vol label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  color: #8a97a5;
+  margin-top: 8px;
+}
+input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+  height: 4px;
+}
+.pause-vol {
+  margin-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 6px;
+}
+
+/* ============ DEBUG PANEL ============ */
+
+#debug-panel {
+  position: absolute;
+  left: 18px;
+  top: 90px;
+  width: 230px;
+  border-color: rgba(255, 179, 92, 0.5);
+}
+#debug-panel.hidden {
+  display: none;
+}
+#debug-panel h3 {
+  color: var(--warn);
+}
+#debug-panel label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: #8a97a5;
+  margin-bottom: 8px;
+}
+#debug-panel select,
+#debug-panel input,
+.ap-target input {
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+#debug-panel select {
+  flex: 1;
+}
+#debug-panel input {
+  width: 70px;
+}
+#debug-panel .btn {
+  width: 100%;
+}
+.ap-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: #8a97a5;
+}
+.ap-target input {
+  width: 52px;
+}
+
 /* ============ NAVBALL ============ */
 
 #navball-ui {
