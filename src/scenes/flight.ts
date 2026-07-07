@@ -1001,14 +1001,16 @@ export class FlightScene implements GameScene {
     _v3.copy(PAD_DIR).applyAxisAngle(_v4.set(0, 1, 0), theta); // local up
     const padWorld = HOME.worldPosition(t, _v2).addScaledVector(
       _v3,
-      HOME.radius + groundHeight(HOME, PAD_DIR) - 1.2,
+      HOME.radius + groundHeight(HOME, PAD_DIR) - 1.8,
     );
     this.campus.position.copy(padWorld.sub(vw));
     this.campus.visible = this.campus.position.length() < 60_000;
     if (this.campus.visible) {
       _f1.crossVectors(_v4.set(0, 1, 0), _v3).normalize(); // east
       _f2.crossVectors(_v3, _f1); // north
-      _campusMat.makeBasis(_f1, _v3, _f2);
+      // NB: (north, up, east) is the right-handed column order — the
+      // (east, up, north) variant is a reflection and breaks the rotation
+      _campusMat.makeBasis(_f2, _v3, _f1);
       this.campus.quaternion.setFromRotationMatrix(_campusMat);
     }
 
