@@ -127,9 +127,13 @@ airflow; lose the capsule and the flight is over. The **AB-7 Heat Shield**
 soaks up reentry heat when it leads the airflow (hold retrograde so it
 does) and tolerates ~2600 K — a must for steep or high-speed entries, with
 a plasma sheath to show you're committed. Parachutes now inflate over a
-few seconds, tear off above ~18 kPa of dynamic pressure, and **armed**
-chutes wait until the air is survivable (subsonic and below ~12 kPa)
-before popping — so arm them and forget them.
+few seconds, tear off above ~32 kPa of dynamic pressure, and **armed**
+chutes wait until the air is survivable (subsonic, moderate pressure)
+before popping — so arm them and forget them. Canopy drag is applied at
+the canopy, above the craft's real center of mass (computed from the part
+mass distribution), so a deployed chute physically rights the vehicle —
+even with SAS off, a tumbling capsule swings around and hangs beneath its
+parachute.
 
 ### Career: science & unlocks
 

@@ -24,8 +24,10 @@ const AMBIENT_K = 260;
 const TEMP_TOL = 1100; // K — ordinary parts start burning off
 const TEMP_TOL_SHIELD = 2600; // K — when a heat shield takes the airflow
 const SHIELD_FACTOR = 0.12; // heating multiplier behind a leading shield
-const CHUTE_RIP_Q = 18_000; // Pa — deployed canopies tear above this
-const CHUTE_SAFE_Q = 12_000; // Pa — armed chutes wait for less than this
+// Heavy stacks fall at ~mg/CdA ≈ 20 kPa terminal, so the "safe" threshold
+// must sit above that — the subsonic gate is the real discriminator.
+const CHUTE_RIP_Q = 32_000; // Pa — deployed canopies tear above this
+const CHUTE_SAFE_Q = 22_000; // Pa — armed chutes wait for less than this
 const CHUTE_SAFE_V = 320; // m/s — ...and subsonic-ish airspeed
 
 const _t1 = new THREE.Vector3();
@@ -263,7 +265,33 @@ export class Simulation {
       _t3.copy(v.vel).sub(_t2); // airspeed
       const va = _t3.length();
       if (va > 0.1) {
-        _acc.addScaledVector(_t3, (-0.5 * rho * va * v.dragArea()) / m);
+        // Hull drag acts at the center of mass — force only, no torque.
+        _acc.addScaledVector(_t3, (-0.5 * rho * va * v.bodyDragArea()) / m);
+        // Canopy drag acts ABOVE the center of mass, so it both brakes the
+        // fall and torques the stack until it hangs under the parachute.
+        // (Gravity itself is torque-free about the CoM — the pendulum
+        // righting comes entirely from this offset drag.)
+        const anchors = v.chuteAnchors();
+        if (anchors.length > 0) {
+          const comY = v.comY();
+          const inertia = v.momentOfInertia();
+          for (const a of anchors) {
+            const k = -0.5 * rho * va * a.cda; // F = k · vAir
+            _acc.addScaledVector(_t3, k / m);
+            // torque = r × F about the CoM
+            _t1.set(0, a.y - comY, 0).applyQuaternion(v.q);
+            _t2.crossVectors(_t1, _up.copy(_t3).multiplyScalar(k));
+            const alpha = _t2.length() / inertia;
+            if (alpha > 1e-6) {
+              v.angVel.addScaledVector(
+                _t2.divideScalar(_t2.length()),
+                Math.min(alpha, 6) * h,
+              );
+            }
+          }
+          // the swinging canopy is itself heavily air-damped
+          v.angVel.multiplyScalar(Math.exp(-1.1 * h));
+        }
         this.aeroThermal(h, rho, va, _t3, alt, msgs);
       }
     }

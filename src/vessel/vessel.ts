@@ -211,13 +211,72 @@ export class Vessel {
     return h;
   }
 
-  dragArea(): number {
-    let cda = 1.5; // rough Cd*A for the whole stack
-    cda += this.boosters.length * 0.5 + this.radialChutes.length * 0.2;
-    for (const p of this.allChutes()) {
-      if (p.deployed) cda += 380 * (p.inflate ?? 1); // canopies take time to fill
+  /** Cd·A of the hull (everything except deployed canopies). */
+  bodyDragArea(): number {
+    return 1.5 + this.boosters.length * 0.5 + this.radialChutes.length * 0.2;
+  }
+
+  /**
+   * Stack-local center height of each part (same convention as the visual:
+   * the stack is centered on the origin, bottom at -H/2). Index-aligned
+   * with `parts`.
+   */
+  partCenterYs(): number[] {
+    const ys = new Array<number>(this.parts.length);
+    let y = -this.stackHeight() / 2;
+    for (let i = this.parts.length - 1; i >= 0; i--) {
+      ys[i] = y + this.parts[i].def.height / 2;
+      y += this.parts[i].def.height;
     }
-    return cda;
+    return ys;
+  }
+
+  /** Mass-weighted center of mass along the stack axis (stack-local y). */
+  comY(): number {
+    const ys = this.partCenterYs();
+    let m = 0;
+    let my = 0;
+    this.parts.forEach((p, i) => {
+      const pm = p.def.dryMass + p.fuel;
+      m += pm;
+      my += pm * ys[i];
+    });
+    for (const b of this.boosters) {
+      const bm = b.def.dryMass + b.fuel;
+      m += bm;
+      my += bm * (ys[b.hostIndex] ?? 0);
+    }
+    for (const c of this.radialChutes) {
+      m += c.def.dryMass;
+      my += c.def.dryMass * (ys[c.hostIndex] ?? 0);
+    }
+    return m > 0 ? my / m : 0;
+  }
+
+  /** Moment of inertia about a transverse axis (uniform-rod estimate). */
+  momentOfInertia(): number {
+    const H = this.stackHeight();
+    return Math.max(400, (this.mass() * H * H) / 12);
+  }
+
+  /**
+   * Deployed canopies with their drag and stack-local attachment height
+   * (the canopy rides a couple of meters above its part).
+   */
+  chuteAnchors(): Array<{ cda: number; y: number }> {
+    const ys = this.partCenterYs();
+    const out: Array<{ cda: number; y: number }> = [];
+    this.parts.forEach((p, i) => {
+      if (p.def.type === 'parachute' && p.deployed && !p.torn) {
+        out.push({ cda: 380 * (p.inflate ?? 1), y: ys[i] + p.def.height / 2 + 2 });
+      }
+    });
+    for (const c of this.radialChutes) {
+      if (c.deployed && !c.torn) {
+        out.push({ cda: 380 * (c.inflate ?? 1), y: (ys[c.hostIndex] ?? 0) + 2 });
+      }
+    }
+    return out;
   }
 
   hasCapsule(): boolean {
