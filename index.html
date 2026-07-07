@@ -13,7 +13,8 @@
       <div id="menu-box">
         <h1>ZENITH<br /><span>SPACE PROGRAM</span></h1>
         <p class="menu-tag">Build a rocket. Escape the sky. Bring them home.</p>
-        <button id="menu-start" class="btn launch">▲ &nbsp;ENTER THE VAB</button>
+        <button id="menu-start" class="btn launch">▲ &nbsp;SCIENCE MODE</button>
+        <button id="menu-free" class="btn launch secondary">▲ &nbsp;FREEDOM MODE</button>
         <button id="menu-new" class="btn danger hidden">NEW GAME (wipe save)</button>
         <div class="menu-settings panel">
           <h3>Sound</h3>
@@ -79,6 +80,7 @@
         </div>
         <div class="row">
           <span id="next-ind" class="ind next">␣ ignition</span>
+          <span id="dock-ind" class="ind hidden">🧲 DOCKED · U</span>
         </div>
       </div>
       <div id="hud-right" class="panel">
@@ -87,14 +89,20 @@
           <button class="btn" id="btn-map">MAP&nbsp;M</button>
           <button class="btn" id="btn-warp-down">◀&nbsp;WARP</button>
           <button class="btn" id="btn-warp-up">WARP&nbsp;▶</button>
-          <button class="btn" id="btn-ap">AUTO&nbsp;⏵</button>
-          <label class="ap-target">TARGET <input type="number" id="ap-alt" value="100" min="1" step="25" /> km</label>
+          <button class="btn" id="btn-ap">ASCENT&nbsp;⏵</button>
+          <label class="ap-target">ALT <input type="number" id="ap-alt" value="100" min="1" step="25" /> km</label>
+        </div>
+        <div class="btn-row">
+          <select id="ap-target"></select>
+          <button class="btn" id="btn-transfer">TRANSFER</button>
+          <button class="btn" id="btn-rdv">RENDEZVOUS</button>
+          <button class="btn" id="btn-dock">DOCK</button>
         </div>
         <div class="keys">
           <b>Shift/Ctrl</b> throttle · <b>Z/X</b> full/cut · <b>Space</b> ignite/stage<br />
           <b>W/S</b> pitch · <b>A/D</b> yaw · <b>Q/E</b> roll · <b>T</b> SAS<br />
-          <b>, / .</b> time warp · <b>M</b> map · <b>P</b> parachute · <b>G</b> autopilot<br />
-          <b>R</b> revert to launch · <b>Esc</b> pause · drag/scroll: camera
+          <b>, / .</b> time warp · <b>M</b> map · <b>P</b> parachute · <b>G</b> ascent AP<br />
+          <b>U</b> undock · <b>R</b> revert to launch · <b>Esc</b> pause · drag/scroll: camera
         </div>
       </div>
       <div id="map-info" class="panel hidden"></div>

@@ -40,17 +40,17 @@ export class MenuScene implements GameScene {
       geo,
       new THREE.MeshStandardMaterial({ map: makeBodyTexture(GAIA), roughness: 1 }),
     );
-    // Menu planet is unit-scale; size the atmosphere shell proportionally.
+    // Menu planet is unit-scale; keep the atmosphere hugging the surface.
     const a = GAIA.atmosphere!;
-    const shellScale = 1 + (a.height * 4) / GAIA.radius;
+    const shellScale = 1 + (a.height * 2) / GAIA.radius;
     const shell = new THREE.Mesh(
       new THREE.SphereGeometry(shellScale, 96, 48),
       makeAtmosphereMaterial(
         a.skyColor.clone(),
         1,
         shellScale,
-        (a.height * 1.3) / GAIA.radius,
-        0.8,
+        (a.height * 0.8) / GAIA.radius,
+        0.85,
       ),
     );
     this.gaia.add(shell);
@@ -86,24 +86,44 @@ export class MenuScene implements GameScene {
     this.onResize();
   }
 
+  private choosingMode = false;
+
   enter(): void {
     $('menu-ui').classList.remove('hidden');
     AUDIO.playMusic('cosmic');
     AUDIO.syncSliders('vol-music', 'vol-sfx');
-    const hasSave = STATE.hasSave();
-    $('menu-start').innerHTML = hasSave ? '▲ &nbsp;CONTINUE' : '▲ &nbsp;ENTER THE VAB';
-    $('menu-new').classList.toggle('hidden', !hasSave);
+    this.choosingMode = !STATE.hasSave();
+    this.refreshButtons();
     if (!this.bound) {
       this.bound = true;
       $('menu-start').addEventListener('click', () => {
         AUDIO.unlock();
+        if (this.choosingMode) STATE.reset('science');
+        this.host.toVAB();
+      });
+      $('menu-free').addEventListener('click', () => {
+        AUDIO.unlock();
+        STATE.reset('freedom');
         this.host.toVAB();
       });
       $('menu-new').addEventListener('click', () => {
-        STATE.wipeSave();
-        location.reload();
+        this.choosingMode = true;
+        this.refreshButtons();
       });
       AUDIO.bindSliders('vol-music', 'vol-sfx');
+    }
+  }
+
+  /** CONTINUE + NEW GAME when a save exists; the two mode buttons otherwise. */
+  private refreshButtons(): void {
+    if (this.choosingMode) {
+      $('menu-start').innerHTML = '▲ &nbsp;SCIENCE MODE';
+      $('menu-free').classList.remove('hidden');
+      $('menu-new').classList.add('hidden');
+    } else {
+      $('menu-start').innerHTML = '▲ &nbsp;CONTINUE';
+      $('menu-free').classList.add('hidden');
+      $('menu-new').classList.remove('hidden');
     }
   }
 

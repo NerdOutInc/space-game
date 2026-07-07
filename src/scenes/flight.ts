@@ -67,6 +67,8 @@ export class FlightScene implements GameScene {
   private lastChutes = 0;
   private pad: THREE.Mesh;
   private debris: Debris[] = [];
+  /** Nearby vessels rendered in the flight view (docking partners etc.). */
+  private nearby = new Map<Vessel, { group: THREE.Group; sig: number }>();
 
   // -- map view --
   private mapScene = new THREE.Scene();
@@ -87,6 +89,7 @@ export class FlightScene implements GameScene {
 
   private mode: 'flight' | 'map' = 'flight';
   private endShown = false;
+  private static debugPhase = 0;
 
   // bound listeners for cleanup
   private onPointerDown = (e: PointerEvent) => this.pointerDown(e);
@@ -306,6 +309,9 @@ export class FlightScene implements GameScene {
     $('btn-warp-up').onclick = () => this.warp(1);
     $('btn-warp-down').onclick = () => this.warp(-1);
     $('btn-ap').onclick = () => this.toggleAutopilot();
+    $('btn-transfer').onclick = () => this.engageProgram('transfer');
+    $('btn-rdv').onclick = () => this.engageProgram('rendezvous');
+    $('btn-dock').onclick = () => this.engageProgram('dock');
     $('end-revert').onclick = () => this.host.revertVessel(this.vessel);
     $('end-vab').onclick = () => this.host.removeVessel(this.vessel);
     $('map-labels').style.display = 'none';
@@ -435,6 +441,11 @@ export class FlightScene implements GameScene {
       case 'KeyG':
         this.toggleAutopilot();
         break;
+      case 'KeyU': {
+        const msg = this.sim.undock();
+        if (msg) this.toast(msg);
+        break;
+      }
       case 'KeyR':
         this.host.revertVessel(this.vessel);
         break;
@@ -465,8 +476,12 @@ export class FlightScene implements GameScene {
     v.landed = false;
     v.destroyed = false;
     v.throttle = 0;
-    v.pos.set(r, 0, 0);
-    v.vel.set(0, 0, -Math.sqrt(body.mu / r)); // prograde, same sense as the planets
+    // successive placements get different phases, so two debug craft in the
+    // same orbit end up separated (handy for rendezvous/docking practice)
+    const a = FlightScene.debugPhase++ * 0.25;
+    const vc = Math.sqrt(body.mu / r);
+    v.pos.set(Math.cos(a) * r, 0, -Math.sin(a) * r);
+    v.vel.set(-Math.sin(a) * vc, 0, -Math.cos(a) * vc); // prograde
     v.q.setFromUnitVectors(_v1.set(0, 1, 0), _v2.set(1, 0, 0));
     v.angVel.set(0, 0, 0);
     if (v.launchedAt === null) v.launchedAt = this.sim.t;
@@ -502,6 +517,7 @@ export class FlightScene implements GameScene {
     if (this.vessel.destroyed) return;
     const ap = this.sim.autopilot;
     if (ap.active) {
+      this.vessel.throttle = 0;
       this.toast(ap.disengage());
       return;
     }
@@ -513,8 +529,68 @@ export class FlightScene implements GameScene {
       target = Math.max(minAlt, 100);
       input.value = String(Math.round(target));
     }
-    ap.targetAlt = target * 1000;
-    this.toast(ap.engage());
+    this.toast(ap.engageAscent(target * 1000));
+  }
+
+  /** Engage a targeted autopilot program from the HUD selector. */
+  private engageProgram(kind: 'transfer' | 'rendezvous' | 'dock'): void {
+    if (this.vessel.destroyed) return;
+    const ap = this.sim.autopilot;
+    const sel = $('ap-target') as HTMLSelectElement;
+    const val = sel.value;
+    if (!val) {
+      this.toast('Autopilot: no target available here');
+      return;
+    }
+    if (val.startsWith('body:')) {
+      if (kind !== 'transfer') {
+        this.toast('Autopilot: rendezvous/dock needs a vessel target');
+        return;
+      }
+      const body = BODIES.find((b) => b.name === val.slice(5));
+      if (body) this.toast(ap.engageTransfer(this.vessel, body));
+      return;
+    }
+    const name = val.slice(7);
+    const target = STATE.vessels.find(
+      (x) => x.name === name && x !== this.vessel && !x.destroyed,
+    );
+    if (!target) {
+      this.toast('Autopilot: target vessel not found');
+      return;
+    }
+    if (kind === 'transfer') {
+      this.toast('Autopilot: transfers target bodies — use rendezvous for vessels');
+      return;
+    }
+    this.toast(ap.engageRendezvous(this.vessel, target, kind === 'dock'));
+  }
+
+  /** Keep the target dropdown in sync with what's actually reachable. */
+  private refreshApTargets(): void {
+    const sel = $('ap-target') as HTMLSelectElement;
+    const v = this.vessel;
+    const options: Array<{ value: string; label: string }> = [];
+    for (const b of BODIES) {
+      if (b.parent === v.body) options.push({ value: `body:${b.name}`, label: `◉ ${b.name}` });
+    }
+    for (const o of STATE.vessels) {
+      if (o !== v && !o.destroyed && !o.landed && o.body === v.body) {
+        options.push({ value: `vessel:${o.name}`, label: `⊕ ${o.name}` });
+      }
+    }
+    const sig = options.map((o) => o.value).join('|');
+    if (sel.dataset.sig === sig) return;
+    sel.dataset.sig = sig;
+    const prev = sel.value;
+    sel.innerHTML = '';
+    for (const o of options) {
+      const opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label;
+      sel.appendChild(opt);
+    }
+    if (options.some((o) => o.value === prev)) sel.value = prev;
   }
 
   private doStage(): void {
@@ -584,19 +660,26 @@ export class FlightScene implements GameScene {
     this.debris.push({ group, body: this.vessel.body, pos, vel, age: 0 });
   }
 
+  private dropNearby(o: Vessel): void {
+    const vis = this.nearby.get(o);
+    if (!vis) return;
+    this.scene.remove(vis.group);
+    this.nearby.delete(o);
+  }
+
   private rebuildRocket(): void {
     this.rocketHolder.clear();
-    const { group, height, boosterMounts } = buildRocketVisual(
-      this.vessel.parts,
-      this.vessel.boosters,
-    );
+    const { group, height, boosterMounts } = buildRocketVisual(this.vessel.parts, [
+      ...this.vessel.boosters,
+      ...this.vessel.radialChutes,
+    ]);
     this.rocketHeight = height;
     this.rocketHolder.add(group);
     this.flame.position.y = -height / 2;
     this.rocketHolder.add(this.flame);
-    // one flame per side booster
+    // one flame per side booster (chute mounts come after boosters in order)
     this.boosterFlames = [];
-    for (const m of boosterMounts) {
+    for (const m of boosterMounts.slice(0, this.vessel.boosters.length)) {
       const f = buildFlame();
       f.scale.set(0.8, 0.8, 0.8);
       f.position.set(m.x, m.y, m.z);
@@ -647,6 +730,8 @@ export class FlightScene implements GameScene {
       rem -= chunk;
     }
     STATE.advanceInactive(STATE.t - t0, v);
+    // Docking must see every vessel at the SAME universal time.
+    for (const m of this.sim.dockingPass(STATE.t - t0)) this.toast(m);
 
     // Autopilot staging happens inside the sim — pick up the wreckage.
     const dropped = this.sim.dropped.splice(0);
@@ -719,6 +804,7 @@ export class FlightScene implements GameScene {
     const b = v.body;
     const lower = b.name.toLowerCase();
 
+    if (v.dockedWith) award('dock');
     if (v.landed) {
       if (b !== HOME) award(`land-${lower}`);
       return;
@@ -825,6 +911,36 @@ export class FlightScene implements GameScene {
     for (const d of this.debris) {
       d.body.worldPosition(t, _v2).add(d.pos).sub(vw);
       d.group.position.copy(_v2);
+    }
+
+    // Other vessels within visual range (docking partners, targets)
+    for (const o of STATE.vessels) {
+      if (o === v || o.destroyed || o.landed || o.body !== v.body) {
+        this.dropNearby(o);
+        continue;
+      }
+      const rel = _v2.copy(o.pos).sub(v.pos);
+      if (rel.length() > 5000) {
+        this.dropNearby(o);
+        continue;
+      }
+      const sig = o.parts.length * 100 + o.deployedChutes();
+      let vis = this.nearby.get(o);
+      if (!vis || vis.sig !== sig) {
+        this.dropNearby(o);
+        const { group } = buildRocketVisual(o.parts, [
+          ...o.boosters,
+          ...o.radialChutes,
+        ]);
+        this.scene.add(group);
+        vis = { group, sig };
+        this.nearby.set(o, vis);
+      }
+      vis.group.position.copy(rel);
+      vis.group.quaternion.copy(o.q);
+    }
+    for (const [o] of this.nearby) {
+      if (!STATE.vessels.includes(o)) this.dropNearby(o);
     }
 
     // Sky color + stars
@@ -1056,6 +1172,8 @@ export class FlightScene implements GameScene {
     $('ap-ind').classList.toggle('on', this.sim.autopilot.active);
     $('stage-ind').textContent = `STAGE ${v.stageCount()}`;
     $('next-ind').textContent = `␣ ${v.nextStageLabel()}`;
+    $('dock-ind').classList.toggle('hidden', !v.dockedWith);
+    this.refreshApTargets();
     const up = _v1.set(0, 1, 0).applyQuaternion(v.q);
     const radial = _v2.copy(v.pos).normalize();
     const tilt = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(up.dot(radial), -1, 1)));

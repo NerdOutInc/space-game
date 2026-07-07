@@ -26,7 +26,10 @@ export const MILESTONE_DEFS: Record<string, { name: string; pts: number }> = {
   'soi-ares': { name: "Entered Ares' sphere of influence", pts: 60 },
   'orbit-ares': { name: 'Stable orbit around Ares', pts: 70 },
   'land-ares': { name: 'Landed on Ares', pts: 150 },
+  dock: { name: 'First docking', pts: 80 },
 };
+
+export type GameMode = 'science' | 'freedom';
 
 interface SavedPart {
   id: string;
@@ -42,6 +45,12 @@ interface SavedBooster {
   ignited: boolean;
 }
 
+interface SavedRadialChute {
+  hostIndex: number;
+  deployed: boolean;
+  armed: boolean;
+}
+
 interface SavedVessel {
   name: string;
   body: string;
@@ -54,21 +63,25 @@ interface SavedVessel {
   reachedSpace: boolean;
   launchedAt: number | null;
   throttle: number;
-  craft: Array<{ id: string; boosters: number }>;
+  craft: Array<{ id: string; boosters: number; chutes?: number }>;
   parts: SavedPart[];
   boosters: SavedBooster[];
+  radialChutes?: SavedRadialChute[];
+  /** Index of the docked partner in the vessels array, or -1. */
+  docked?: number;
   /** v1 saves stored the craft as a flat list of part ids. */
   defs?: string[];
 }
 
 interface SaveData {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   t: number;
   counter: number;
   science: number;
   milestones: string[];
   unlocked: string[];
   vessels: SavedVessel[];
+  mode?: GameMode;
 }
 
 /**
@@ -81,6 +94,8 @@ export class GameState {
   /** Universal time, seconds. Never resets. */
   t = 0;
   vessels: Vessel[] = [];
+  /** 'science' = career with unlocks; 'freedom' = everything available. */
+  mode: GameMode = 'science';
   science = 0;
   milestones = new Set<string>();
   /** Purchased part ids (parts without a cost are always available). */
@@ -118,7 +133,21 @@ export class GameState {
   }
 
   isUnlocked(def: PartDef): boolean {
+    if (this.mode === 'freedom') return true;
     return !def.cost || this.unlocked.has(def.id);
+  }
+
+  /** Start a fresh game in the given mode (replaces any existing save). */
+  reset(mode: GameMode): void {
+    this.t = 0;
+    this.vessels = [];
+    this.mode = mode;
+    this.science = 0;
+    this.milestones = new Set();
+    this.unlocked = new Set();
+    this.counter = 1;
+    this.wiped = false;
+    this.save();
   }
 
   /** Spend science to unlock a part. Returns true on success. */
@@ -141,6 +170,17 @@ export class GameState {
     if (dt <= 0) return;
     for (const v of this.vessels) {
       if (v === active || v.landed || v.destroyed) continue;
+      // Docked partners ride along instead of propagating independently:
+      // skip if our partner is the active vessel (the sim syncs us) or an
+      // earlier list entry (it propagated this frame; we follow it).
+      if (v.dockedWith) {
+        if (v.dockedWith === active) continue;
+        const partnerIdx = this.vessels.indexOf(v.dockedWith);
+        if (partnerIdx !== -1 && partnerIdx < this.vessels.indexOf(v)) {
+          v.followDockPartner();
+          continue;
+        }
+      }
       propagateKepler(v.pos, v.vel, dt, v.body.mu, v.pos, v.vel);
 
       const b = v.body;
@@ -178,12 +218,13 @@ export class GameState {
   save(): void {
     if (this.wiped) return;
     const data: SaveData = {
-      version: 2,
+      version: 3,
       t: this.t,
       counter: this.counter,
       science: this.science,
       milestones: [...this.milestones],
       unlocked: [...this.unlocked],
+      mode: this.mode,
       vessels: this.vessels.map((v) => ({
         name: v.name,
         body: v.body.name,
@@ -196,7 +237,11 @@ export class GameState {
         reachedSpace: v.reachedSpace,
         launchedAt: v.launchedAt,
         throttle: v.throttle,
-        craft: v.craft.map((c) => ({ id: c.def.id, boosters: c.boosters })),
+        craft: v.craft.map((c) => ({
+          id: c.def.id,
+          boosters: c.boosters,
+          chutes: c.chutes,
+        })),
         parts: v.parts.map((p) => ({
           id: p.def.id,
           fuel: p.fuel,
@@ -209,6 +254,12 @@ export class GameState {
           fuel: b.fuel,
           ignited: b.ignited,
         })),
+        radialChutes: v.radialChutes.map((c) => ({
+          hostIndex: c.hostIndex,
+          deployed: c.deployed,
+          armed: c.armed,
+        })),
+        docked: v.dockedWith ? this.vessels.indexOf(v.dockedWith) : -1,
       })),
     };
     try {
@@ -224,20 +275,26 @@ export class GameState {
     if (!raw) return false;
     try {
       const data = JSON.parse(raw) as SaveData;
-      if (data.version !== 1 && data.version !== 2) return false;
+      if (data.version !== 1 && data.version !== 2 && data.version !== 3) return false;
       this.t = data.t;
       this.counter = data.counter;
       this.science = data.science;
       this.milestones = new Set(data.milestones);
       this.unlocked = new Set(data.unlocked);
+      this.mode = data.mode ?? 'science';
       this.vessels = [];
       const srb = PART_BY_ID[BOOSTER_DEF_ID];
+      const chuteDef = PART_BY_ID['parachute'];
       for (const sv of data.vessels) {
         // v1 stored a flat part-id list; v2 stores craft slots with boosters
         const craftIds = sv.craft ?? (sv.defs ?? []).map((id) => ({ id, boosters: 0 }));
         const craft = craftIds
           .filter((c) => PART_BY_ID[c.id])
-          .map((c) => ({ def: PART_BY_ID[c.id], boosters: c.boosters ?? 0 }));
+          .map((c) => ({
+            def: PART_BY_ID[c.id],
+            boosters: c.boosters ?? 0,
+            chutes: c.chutes ?? 0,
+          }));
         if (craft.length === 0) continue;
         const body = BODIES.find((b) => b.name === sv.body) ?? HOME;
         const v = new Vessel(craft, body);
@@ -268,8 +325,28 @@ export class GameState {
           armed: false,
           hostIndex: b.hostIndex,
         }));
+        v.radialChutes = (sv.radialChutes ?? []).map((c) => ({
+          def: chuteDef,
+          fuel: 0,
+          ignited: false,
+          deployed: c.deployed,
+          armed: c.armed,
+          hostIndex: c.hostIndex,
+        }));
         this.vessels.push(v);
       }
+      // Re-link docked pairs now that every vessel exists.
+      data.vessels.forEach((sv, i) => {
+        const partner = sv.docked ?? -1;
+        const a = this.vessels[i];
+        const b = this.vessels[partner];
+        if (a && b && partner > i) {
+          a.dockedWith = b;
+          b.dockedWith = a;
+          a.computeDockLink();
+          b.computeDockLink();
+        }
+      });
       return true;
     } catch {
       return false;

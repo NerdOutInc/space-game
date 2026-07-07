@@ -1,6 +1,13 @@
 export const G0 = 9.80665;
 
-export type PartType = 'capsule' | 'tank' | 'engine' | 'decoupler' | 'parachute' | 'srb';
+export type PartType =
+  | 'capsule'
+  | 'tank'
+  | 'engine'
+  | 'decoupler'
+  | 'parachute'
+  | 'srb'
+  | 'dock';
 
 export interface PartDef {
   id: string;
@@ -37,6 +44,16 @@ export const PARTS: PartDef[] = [
     height: 0.4,
     radius: 0.3,
     info: 'Deploy with P below 40 km in atmosphere. Put it on top.',
+  },
+  {
+    id: 'dock',
+    name: 'D-1 Magnetic Dock',
+    type: 'dock',
+    dryMass: 150,
+    height: 0.45,
+    radius: 0.625,
+    info: 'Magnetic docking port — put it on TOP. Approach another port nose-first, slowly; magnets do the rest. U undocks.',
+    cost: 40,
   },
   {
     id: 'tank-small',
@@ -118,18 +135,25 @@ export const PART_BY_ID: Record<string, PartDef> = Object.fromEntries(
 
 /**
  * One slot of a craft design: a stack part plus optional radially-attached
- * side boosters (Anvil SRBs, in symmetric pairs of 2 or 4).
+ * side boosters (Anvil SRBs) and radial parachutes, in symmetric pairs.
  */
 export interface CraftPart {
   def: PartDef;
   boosters: number;
+  chutes: number;
 }
 
 export const BOOSTER_DEF_ID = 'srb';
+export const CHUTE_DEF_ID = 'parachute';
 
 /** Which stack parts can host radial boosters. */
 export function canHostBoosters(def: PartDef): boolean {
   return def.type === 'tank' || def.type === 'srb';
+}
+
+/** Which stack parts can host radial parachutes. */
+export function canHostChutes(def: PartDef): boolean {
+  return def.type === 'capsule' || def.type === 'tank' || def.type === 'dock';
 }
 
 /** Two-stage orbital launcher (needs unlocked parts). */

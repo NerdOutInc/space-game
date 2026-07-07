@@ -8,6 +8,8 @@ import { showToast } from '../util/toast';
 import {
   BOOSTER_DEF_ID,
   canHostBoosters,
+  canHostChutes,
+  CHUTE_DEF_ID,
   CraftPart,
   PART_BY_ID,
   PARTS,
@@ -18,7 +20,7 @@ import {
 import { computeStageStats, describeStages } from '../vessel/vessel';
 
 const CATEGORIES: Array<{ label: string; types: string[] }> = [
-  { label: 'Command & Recovery', types: ['capsule', 'parachute'] },
+  { label: 'Command & Recovery', types: ['capsule', 'parachute', 'dock'] },
   { label: 'Propulsion', types: ['tank', 'engine', 'srb'] },
   { label: 'Structural', types: ['decoupler'] },
 ];
@@ -174,6 +176,7 @@ export class VABScene implements GameScene {
       this.stack = (orbitalOk ? SAMPLE_ROCKET : SAMPLE_STARTER).map((id) => ({
         def: PART_BY_ID[id],
         boosters: 0,
+        chutes: 0,
       }));
       if (!orbitalOk)
         showToast('Starter hopper loaded — unlock more parts for the orbital rocket');
@@ -198,7 +201,7 @@ export class VABScene implements GameScene {
   }
 
   private addPart(def: PartDef): void {
-    this.stack.push({ def, boosters: 0 });
+    this.stack.push({ def, boosters: 0, chutes: 0 });
     this.refresh();
   }
 
@@ -212,8 +215,10 @@ export class VABScene implements GameScene {
     if (this.stack.length > 0) {
       const boosters: Array<{ def: PartDef; hostIndex: number }> = [];
       const srb = PART_BY_ID[BOOSTER_DEF_ID];
+      const chute = PART_BY_ID[CHUTE_DEF_ID];
       this.stack.forEach((c, i) => {
         for (let k = 0; k < c.boosters; k++) boosters.push({ def: srb, hostIndex: i });
+        for (let k = 0; k < c.chutes; k++) boosters.push({ def: chute, hostIndex: i });
       });
       const { group, height: h } = buildRocketVisual(
         this.stack.map((c) => ({ def: c.def })),
@@ -265,7 +270,10 @@ export class VABScene implements GameScene {
       const row = document.createElement('div');
       row.className = 'stack-item';
       const label = document.createElement('span');
-      label.innerHTML = c.def.name + (c.boosters ? ` <b class="bcount">+${c.boosters}◎</b>` : '');
+      label.innerHTML =
+        c.def.name +
+        (c.boosters ? ` <b class="bcount">+${c.boosters}◎</b>` : '') +
+        (c.chutes ? ` <b class="bcount">+${c.chutes}☂</b>` : '');
       row.appendChild(label);
 
       const controls = document.createElement('span');
@@ -286,6 +294,18 @@ export class VABScene implements GameScene {
         });
         controls.appendChild(bBtn);
       }
+      if (canHostChutes(c.def)) {
+        const cBtn = document.createElement('button');
+        cBtn.className = 'mini-btn';
+        cBtn.textContent = '☂+';
+        cBtn.title = 'Attach radial parachutes (0 → 2 → 0)';
+        cBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          c.chutes = c.chutes >= 2 ? 0 : 2;
+          this.refresh();
+        });
+        controls.appendChild(cBtn);
+      }
       const x = document.createElement('span');
       x.className = 'x';
       x.textContent = '✕';
@@ -303,15 +323,24 @@ export class VABScene implements GameScene {
   private refreshStats(): void {
     const stats = $('vab-stats');
     const srb = PART_BY_ID[BOOSTER_DEF_ID];
+    const chuteDef = PART_BY_ID[CHUTE_DEF_ID];
     const mass = this.stack.reduce(
       (s, c) =>
-        s + c.def.dryMass + (c.def.fuel ?? 0) + c.boosters * (srb.dryMass + (srb.fuel ?? 0)),
+        s +
+        c.def.dryMass +
+        (c.def.fuel ?? 0) +
+        c.boosters * (srb.dryMass + (srb.fuel ?? 0)) +
+        c.chutes * chuteDef.dryMass,
       0,
     );
     const height = this.stack.reduce((s, c) => s + c.def.height, 0);
+    const modeRow =
+      STATE.mode === 'freedom'
+        ? `<div class="srow"><span>Mode</span><b>FREEDOM</b></div>`
+        : `<div class="srow"><span>Science</span><b>✦ ${STATE.science}</b></div>`;
     let html = `
-      <div class="srow"><span>Science</span><b>✦ ${STATE.science}</b></div>
-      <div class="srow"><span>Parts</span><b>${this.stack.length + this.stack.reduce((s, c) => s + c.boosters, 0)}</b></div>
+      ${modeRow}
+      <div class="srow"><span>Parts</span><b>${this.stack.length + this.stack.reduce((s, c) => s + c.boosters + c.chutes, 0)}</b></div>
       <div class="srow"><span>Height</span><b>${height.toFixed(1)} m</b></div>
       <div class="srow"><span>Mass</span><b>${fmtMass(mass)}</b></div>`;
     const stages = computeStageStats(this.stack).filter((s) => s.dv > 0 || s.twr > 0);

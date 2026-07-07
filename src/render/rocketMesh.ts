@@ -133,6 +133,33 @@ function buildPartMesh(def: PartDef, deployed: boolean): THREE.Group {
       g.add(tip);
       break;
     }
+    case 'dock': {
+      const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(r * 0.74, r * 0.9, h * 0.55, 24),
+        metal(0xb8bec6, 0.35),
+      );
+      base.position.y = -h * 0.2;
+      g.add(base);
+      const collar = new THREE.Mesh(
+        new THREE.CylinderGeometry(r * 0.52, r * 0.6, h * 0.5, 24),
+        metal(0x2a2e35, 0.3),
+      );
+      collar.position.y = h * 0.22;
+      g.add(collar);
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(r * 0.5, 0.05, 10, 28),
+        new THREE.MeshStandardMaterial({
+          color: 0xffd257,
+          roughness: 0.4,
+          metalness: 0.7,
+          emissive: 0x332200,
+        }),
+      );
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = h * 0.45;
+      g.add(ring);
+      break;
+    }
     case 'decoupler': {
       const band = new THREE.Mesh(
         new THREE.CylinderGeometry(r * 1.02, r * 1.02, h, 24),

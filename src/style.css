@@ -502,6 +502,37 @@ body {
   color: #8a97a5;
   letter-spacing: 0.1em;
 }
+#menu-free {
+  display: inline-block;
+  margin-left: 10px;
+  font-size: 16px;
+  padding: 14px 30px;
+  letter-spacing: 0.25em;
+  color: #06121f;
+  background: rgba(127, 212, 255, 0.85);
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 0 26px rgba(127, 212, 255, 0.3);
+}
+#menu-free:hover {
+  background: rgba(170, 226, 255, 0.95);
+}
+#menu-free.hidden {
+  display: none;
+}
+#ap-target {
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  padding: 4px 6px;
+  max-width: 118px;
+}
+.ind.hidden {
+  display: none;
+}
 #menu-new {
   display: block;
   margin-top: 10px;

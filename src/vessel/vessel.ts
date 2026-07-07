@@ -1,7 +1,14 @@
 import * as THREE from 'three';
 import { Body, HOME } from '../universe/bodies';
 import { PAD_DIR } from '../universe/terrain';
-import { BOOSTER_DEF_ID, CraftPart, G0, PART_BY_ID, PartDef } from './parts';
+import {
+  BOOSTER_DEF_ID,
+  CHUTE_DEF_ID,
+  CraftPart,
+  G0,
+  PART_BY_ID,
+  PartDef,
+} from './parts';
 
 export interface PartInstance {
   def: PartDef;
@@ -36,6 +43,13 @@ function newInstance(def: PartDef): PartInstance {
 export class Vessel {
   parts: PartInstance[]; // stack, ordered top → bottom
   boosters: BoosterInstance[] = [];
+  radialChutes: BoosterInstance[] = [];
+
+  /** Docking link: both vessels reference each other while docked. */
+  dockedWith: Vessel | null = null;
+  /** Partner offset along our +Y and relative orientation, set at capture. */
+  dockOffset = 0;
+  dockRelQ = new THREE.Quaternion();
 
   name = 'Untitled Craft';
   /** The original build, kept for "revert to launch". */
@@ -61,15 +75,54 @@ export class Vessel {
   private hadThrust = false;
 
   constructor(craft: CraftPart[], body: Body = HOME) {
-    this.craft = craft.map((c) => ({ def: c.def, boosters: c.boosters }));
+    this.craft = craft.map((c) => ({
+      def: c.def,
+      boosters: c.boosters ?? 0,
+      chutes: c.chutes ?? 0,
+    }));
     this.parts = craft.map((c) => newInstance(c.def));
     const srb = PART_BY_ID[BOOSTER_DEF_ID];
+    const chute = PART_BY_ID[CHUTE_DEF_ID];
     craft.forEach((c, i) => {
       for (let k = 0; k < (c.boosters ?? 0); k++) {
         this.boosters.push({ ...newInstance(srb), hostIndex: i });
       }
+      for (let k = 0; k < (c.chutes ?? 0); k++) {
+        this.radialChutes.push({ ...newInstance(chute), hostIndex: i });
+      }
     });
     this.body = body;
+  }
+
+  /** All parachutes: stack-mounted plus radial. */
+  allChutes(): PartInstance[] {
+    return [
+      ...this.parts.filter((p) => p.def.type === 'parachute'),
+      ...this.radialChutes,
+    ];
+  }
+
+  hasFreeDock(): boolean {
+    return this.parts[0]?.def.type === 'dock' && !this.dockedWith;
+  }
+
+  /** Recompute the rigid link from current poses (docking / save load). */
+  computeDockLink(): void {
+    const o = this.dockedWith;
+    if (!o) return;
+    this.dockOffset = this.stackHeight() / 2 + o.stackHeight() / 2 + 0.1;
+    this.dockRelQ.copy(this.q).invert().multiply(o.q);
+  }
+
+  /** Snap this vessel to its dock partner's pose (partner is authoritative). */
+  followDockPartner(): void {
+    const o = this.dockedWith;
+    if (!o) return;
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(o.q);
+    this.pos.copy(o.pos).addScaledVector(up, o.dockOffset);
+    this.vel.copy(o.vel);
+    this.q.copy(o.q).multiply(o.dockRelQ);
+    this.body = o.body;
   }
 
   /** Part groups split by decouplers, ordered top → bottom (decouplers excluded). */
@@ -111,6 +164,7 @@ export class Vessel {
     let m = 0;
     for (const p of this.parts) m += p.def.dryMass + p.fuel;
     for (const b of this.boosters) m += b.def.dryMass + b.fuel;
+    for (const c of this.radialChutes) m += c.def.dryMass;
     return m;
   }
 
@@ -122,9 +176,9 @@ export class Vessel {
 
   dragArea(): number {
     let cda = 1.5; // rough Cd*A for the whole stack
-    cda += this.boosters.length * 0.5;
-    for (const p of this.parts) {
-      if (p.def.type === 'parachute' && p.deployed) cda += 380;
+    cda += this.boosters.length * 0.5 + this.radialChutes.length * 0.2;
+    for (const p of this.allChutes()) {
+      if (p.deployed) cda += 380;
     }
     return cda;
   }
@@ -239,8 +293,7 @@ export class Vessel {
     if (unlitCore || unlitBoosters) return 'ignition';
     if (this.hasSpentBoosters()) return 'drop boosters';
     if (this.parts.some((p) => p.def.type === 'decoupler')) return 'stage sep';
-    if (this.parts.some((p) => p.def.type === 'parachute' && !p.deployed && !p.armed))
-      return 'arm chute';
+    if (this.allChutes().some((p) => !p.deployed && !p.armed)) return 'arm chutes';
     return '—';
   }
 
@@ -275,6 +328,7 @@ export class Vessel {
       const dropped = this.parts.slice(idx); // decoupler goes with the lower half
       const droppedBoosters = this.boosters.filter((b) => b.hostIndex >= idx);
       this.boosters = this.boosters.filter((b) => b.hostIndex < idx);
+      this.radialChutes = this.radialChutes.filter((c) => c.hostIndex < idx);
       this.parts = this.parts.slice(0, idx);
       // Auto-ignite the new bottom stage's engines and boosters.
       for (const p of this.bottomGroup()) {
@@ -289,13 +343,11 @@ export class Vessel {
       };
     }
 
-    const chute = this.parts.find(
-      (p) => p.def.type === 'parachute' && !p.deployed && !p.armed,
-    );
-    if (chute) {
-      chute.armed = true;
+    const unarmed = this.allChutes().filter((p) => !p.deployed && !p.armed);
+    if (unarmed.length > 0) {
+      unarmed.forEach((p) => (p.armed = true));
       return {
-        msg: 'Parachute armed — deploys in atmosphere below 40 km',
+        msg: `Parachute${unarmed.length > 1 ? 's' : ''} armed — deploys in atmosphere below 40 km`,
         ...none,
       };
     }
@@ -304,15 +356,17 @@ export class Vessel {
   }
 
   deployParachute(): boolean {
-    const chute = this.parts.find((p) => p.def.type === 'parachute' && !p.deployed);
-    if (!chute) return false;
-    chute.deployed = true;
-    chute.armed = false;
+    const chutes = this.allChutes().filter((p) => !p.deployed);
+    if (chutes.length === 0) return false;
+    for (const c of chutes) {
+      c.deployed = true;
+      c.armed = false;
+    }
     return true;
   }
 
   deployedChutes(): number {
-    return this.parts.filter((p) => p.def.type === 'parachute' && p.deployed).length;
+    return this.allChutes().filter((p) => p.deployed).length;
   }
 }
 
@@ -328,19 +382,21 @@ export interface StageStats {
 interface GroupInfo {
   parts: PartDef[];
   boosters: number;
+  chutes: number;
   decouplerAbove: PartDef | null;
 }
 
 function splitGroups(craft: CraftPart[]): GroupInfo[] {
   const groups: GroupInfo[] = [];
-  let cur: GroupInfo = { parts: [], boosters: 0, decouplerAbove: null };
+  let cur: GroupInfo = { parts: [], boosters: 0, chutes: 0, decouplerAbove: null };
   for (const c of craft) {
     if (c.def.type === 'decoupler') {
       groups.push(cur);
-      cur = { parts: [], boosters: 0, decouplerAbove: c.def };
+      cur = { parts: [], boosters: 0, chutes: 0, decouplerAbove: c.def };
     } else {
       cur.parts.push(c.def);
       cur.boosters += c.boosters ?? 0;
+      cur.chutes += c.chutes ?? 0;
     }
   }
   groups.push(cur);
@@ -349,13 +405,15 @@ function splitGroups(craft: CraftPart[]): GroupInfo[] {
 
 export function computeStageStats(craft: CraftPart[], g = 9.81): StageStats[] {
   const srb = PART_BY_ID[BOOSTER_DEF_ID];
+  const chuteDef = PART_BY_ID[CHUTE_DEF_ID];
   const groups = splitGroups(craft);
   let m0 = craft.reduce(
     (s, c) =>
       s +
       c.def.dryMass +
       (c.def.fuel ?? 0) +
-      (c.boosters ?? 0) * (srb.dryMass + (srb.fuel ?? 0)),
+      (c.boosters ?? 0) * (srb.dryMass + (srb.fuel ?? 0)) +
+      (c.chutes ?? 0) * chuteDef.dryMass,
     0,
   );
   const stats: StageStats[] = [];
@@ -377,7 +435,8 @@ export function computeStageStats(craft: CraftPart[], g = 9.81): StageStats[] {
     stats.push({ index: groups.length - gi, dv, twr, fuel });
     const groupWet =
       grp.parts.reduce((s, d) => s + d.dryMass + (d.fuel ?? 0), 0) +
-      grp.boosters * (srb.dryMass + (srb.fuel ?? 0));
+      grp.boosters * (srb.dryMass + (srb.fuel ?? 0)) +
+      grp.chutes * chuteDef.dryMass;
     m0 -= groupWet + (grp.decouplerAbove?.dryMass ?? 0);
   }
   return stats;
@@ -406,6 +465,7 @@ export function describeStages(craft: CraftPart[]): string[] {
       out.push(next.length > 0 ? `Decouple + ignite ${next.join(' + ')}` : 'Decouple');
     }
   }
-  if (craft.some((c) => c.def.type === 'parachute')) out.push('Arm parachute');
+  if (craft.some((c) => c.def.type === 'parachute' || (c.chutes ?? 0) > 0))
+    out.push('Arm parachutes');
   return out;
 }

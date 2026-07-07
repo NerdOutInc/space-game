@@ -35,7 +35,7 @@ export class Simulation {
   /** Parts dropped by autopilot staging, for the scene to turn into debris. */
   dropped: PartInstance[][] = [];
   droppedBoosters: BoosterInstance[][] = [];
-  private state: GameState;
+  readonly state: GameState;
 
   constructor(vessel: Vessel, state: GameState) {
     this.vessel = vessel;
@@ -123,6 +123,93 @@ export class Simulation {
     return msgs;
   }
 
+  /**
+   * Magnetic docking pass. MUST run after inactive vessels have been
+   * advanced to the same universal time as the active vessel — inside
+   * step() the two would be one frame of orbital motion (~100 m!) apart.
+   */
+  dockingPass(dt: number): string[] {
+    const msgs: string[] = [];
+    this.updateDocking(dt, msgs);
+    if (this.vessel.dockedWith) this.vessel.dockedWith.followDockPartner();
+    return msgs;
+  }
+
+  private dockCooldownUntil = 0;
+
+  /** Magnetic docking: attract, align, and capture nearby free ports. */
+  private updateDocking(dt: number, msgs: string[]): void {
+    const v = this.vessel;
+    if (this.t < this.dockCooldownUntil) return;
+    if (v.landed || v.destroyed || v.dockedWith || !v.hasFreeDock()) return;
+    const upA = _t1.set(0, 1, 0).applyQuaternion(v.q);
+    for (const o of this.state.vessels) {
+      if (
+        o === v ||
+        o.destroyed ||
+        o.landed ||
+        o.body !== v.body ||
+        !o.hasFreeDock()
+      ) {
+        continue;
+      }
+      const upB = _t2.set(0, 1, 0).applyQuaternion(o.q);
+      // port positions (ports sit on top of each stack)
+      const pA = _t3.copy(v.pos).addScaledVector(upA, v.stackHeight() / 2);
+      const pB = _up.copy(o.pos).addScaledVector(upB, o.stackHeight() / 2);
+      const d = pA.distanceTo(pB);
+      if (d > 15) continue;
+      const vRel = _east.copy(v.vel).sub(o.vel).length();
+      if (vRel > 4) continue;
+      // evaluate everything BEFORE steering (steerToward reuses scratch vecs)
+      const align = upA.dot(upB);
+      const capture = d < 2.6 && vRel < 1.5 && align < -0.4;
+
+      // magnetic pull on the active vessel (stronger as the gap closes)
+      const dir = pB.sub(pA).normalize(); // NB: reuses _up storage
+      const pull = d < 4 ? 1.2 : Math.min(0.5, (15 - d) * 0.06);
+      v.vel.addScaledVector(dir, pull * dt);
+      // ...and damping, so the pair settles instead of swinging past
+      if (d < 8) {
+        _t3.copy(v.vel).sub(o.vel);
+        v.vel.addScaledVector(_t3, -Math.min(0.4, dt * 0.5));
+      }
+      // alignment torque once close: our port turns to face theirs
+      if (!capture && d < 12) {
+        const want = _north.copy(upB).multiplyScalar(-1);
+        this.steerToward(Math.min(dt, 0.1) * 2.5, want);
+      }
+      if (capture) {
+        v.dockedWith = o;
+        o.dockedWith = v;
+        // snap the pair together, ports touching
+        v.computeDockLink();
+        o.q.copy(v.q);
+        o.q.multiply(_dq.setFromAxisAngle(_east.set(1, 0, 0), Math.PI));
+        v.computeDockLink();
+        v.dockedWith.followDockPartner();
+        o.computeDockLink();
+        this.warp = 1;
+        msgs.push('Docking confirmed! 🧲  (U to undock)');
+      }
+      return; // only consider the nearest candidate per frame
+    }
+  }
+
+  /** Separate a docked pair with a gentle push. */
+  undock(): string | null {
+    const v = this.vessel;
+    const o = v.dockedWith;
+    if (!o) return null;
+    v.dockedWith = null;
+    o.dockedWith = null;
+    this.dockCooldownUntil = this.t + 60; // let the pair drift clear
+    _t1.set(0, 1, 0).applyQuaternion(v.q);
+    o.vel.addScaledVector(_t1, 0.8);
+    v.vel.addScaledVector(_t1, -0.2);
+    return 'Undocked';
+  }
+
   private substep(h: number, ctrl: Controls, msgs: string[]): void {
     const v = this.vessel;
     const b = v.body;
@@ -146,7 +233,7 @@ export class Simulation {
       rho = b.atmosphere.rho0 * pressureRatio;
     }
 
-    const m = v.mass();
+    const m = v.mass() + (v.dockedWith?.mass() ?? 0);
 
     // Thrust along the stack's local +Y
     const thrust = v.totalThrust(pressureRatio);
@@ -161,13 +248,15 @@ export class Simulation {
     // Armed parachutes pop automatically once it's safe-ish: in atmosphere,
     // below 40 km, and descending.
     if (b.atmosphere && alt < 40_000 && v.pos.dot(v.vel) < 0) {
-      for (const p of v.parts) {
-        if (p.def.type === 'parachute' && p.armed && !p.deployed) {
+      let popped = 0;
+      for (const p of v.allChutes()) {
+        if (p.armed && !p.deployed) {
           p.deployed = true;
           p.armed = false;
-          msgs.push('Parachute deployed!');
+          popped++;
         }
       }
+      if (popped > 0) msgs.push(`Parachute${popped > 1 ? 's' : ''} deployed!`);
     }
 
     // Drag (relative to the co-rotating atmosphere)

@@ -86,6 +86,39 @@ the menu/flight ("cosmic glow") and the VAB ("dunes"). Volume sliders live
 on the main menu and in the pause menu (Esc); settings persist. Audio
 credits: freesound community.
 
+### Game modes
+
+New games choose **Science Mode** (career: milestones earn ✦ to unlock
+parts) or **Freedom Mode** (everything available from the start). Every new
+game starts deterministically at the same coastal plateau at **dawn** — the
+sun sits on the eastern horizon at T-0 and rises as Gaia spins.
+
+### Docking
+
+Put a **D-1 Magnetic Dock** on TOP of two craft, bring the ports within a
+couple of meters nose-first and slow (< 1.5 m/s), and the magnets pull,
+align, and capture. Docked pairs fly as one (combined mass; the partner
+rides along through SOI changes and saves). `U` undocks with a gentle push
+and a cooldown so the magnets don't immediately re-grab. First docking is
+worth +80 ✦. Since the dock takes the top slot, mount recovery parachutes
+radially (☂+ on capsule/tank/dock stack rows).
+
+### Autopilot programs (MechJeb-lite)
+
+The HUD's program row targets any body orbiting your current primary or
+any vessel in your SOI:
+
+- **ASCENT** — gravity turn to a circular parking orbit at the chosen altitude
+- **TRANSFER** — Hohmann transfer: waits for the phase window, burns,
+  coasts (auto-warp), corrects a too-low arrival periapsis, and captures
+  into a closed orbit at the target body
+- **RENDEZVOUS** — phased intercept of another vessel, velocity matching,
+  and a proportional approach to ~250 m
+- **DOCK** — rendezvous plus a nose-first port approach until the magnets take over
+
+All programs stage automatically, ignite engines when they need thrust,
+and manage time warp themselves.
+
 ### Career: science & unlocks
 
 Exploration firsts earn **science** (✦): breaking 10 km, reaching space,

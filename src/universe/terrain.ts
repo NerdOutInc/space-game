@@ -84,9 +84,11 @@ function rawHeight(body: Body, dirFixed: THREE.Vector3): number {
 }
 
 /**
- * Find dry land for the launch site: walk the equator outward from
- * longitude 180° (sunlit at t=0) until the terrain is comfortably above sea
- * level in the whole neighborhood. Deterministic, since the noise is seeded.
+ * Find dry land for the launch site: walk the equator outward from the DAWN
+ * terminator (longitude 90°: at t=0 the sun sits right on the pad's eastern
+ * horizon and rises as Gaia spins) until the terrain is comfortably above
+ * sea level in the whole neighborhood. Deterministic, since the noise is
+ * seeded — every new game starts at the same site at sunrise.
  */
 const _up = new THREE.Vector3(0, 1, 0);
 
@@ -95,7 +97,7 @@ function findPadSite(): { dir: THREE.Vector3; alt: number } {
   const probe = new THREE.Vector3();
   for (let dphi = 0; dphi < Math.PI; dphi += 0.015) {
     for (const s of dphi === 0 ? [1] : [1, -1]) {
-      const phi = Math.PI + dphi * s;
+      const phi = Math.PI / 2 + dphi * s;
       dir.set(Math.cos(phi), 0, -Math.sin(phi));
       const h = rawHeight(HOME, dir);
       if (h < 150 || h > 2500) continue;
