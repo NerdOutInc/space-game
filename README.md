@@ -13,6 +13,11 @@ npm install
 npm run dev      # opens on http://localhost:5173
 ```
 
+## Deploying to GitHub Pages
+
+Pushes to `main` automatically build and deploy the Vite app to GitHub Pages
+using the repository path (`/space-game/`).
+
 ## How to play
 
 1. **VAB (Vehicle Assembly)** — click parts to stack them (top → bottom).
