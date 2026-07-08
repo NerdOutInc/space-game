@@ -8,6 +8,15 @@ export interface BoosterMount {
   z: number;
 }
 
+/** A deployed canopy the flight scene can animate (inflation + sway). */
+export interface CanopyAnim {
+  group: THREE.Object3D;
+  source: { inflate?: number };
+  /** Rest orientation (radial chutes tilt outward). */
+  base: THREE.Quaternion;
+  phase: number;
+}
+
 export interface RocketVisual {
   group: THREE.Group;
   height: number;
@@ -15,6 +24,8 @@ export interface RocketVisual {
   boosterMounts: BoosterMount[];
   /** Per-stack-part mesh groups (index-aligned with the parts array). */
   partGroups: THREE.Group[];
+  /** Deployed parachute canopies, ready for animation. */
+  canopies: CanopyAnim[];
 }
 
 function metal(color: number, rough = 0.55): THREE.MeshStandardMaterial {
@@ -47,12 +58,27 @@ function buildPartMesh(def: PartDef, deployed: boolean): THREE.Group {
       break;
     }
     case 'parachute': {
+      // white canister with a bright orange dome — visible even radially
       const can = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.18, 0.3, h, 16),
-        metal(0xd95d2a, 0.6),
+        new THREE.CylinderGeometry(r * 0.88, r, h * 0.85, 16),
+        metal(0xe8e4dc, 0.5),
       );
+      can.position.y = -h * 0.08;
       g.add(can);
+      const cap = new THREE.Mesh(
+        new THREE.SphereGeometry(r * 0.88, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+        metal(0xe86a2e, 0.55),
+      );
+      cap.scale.y = 0.65;
+      cap.position.y = h * 0.34;
+      g.add(cap);
       if (deployed) {
+        // Canopy + lines live in one group anchored at the canister top, so
+        // scaling the group inflates the whole assembly from its attach
+        // point (the flight scene animates this from the chute's inflate).
+        const canopyGroup = new THREE.Group();
+        canopyGroup.name = 'canopy';
+        canopyGroup.position.y = h / 2;
         const canopy = new THREE.Mesh(
           new THREE.SphereGeometry(5, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
           new THREE.MeshStandardMaterial({
@@ -61,20 +87,36 @@ function buildPartMesh(def: PartDef, deployed: boolean): THREE.Group {
             side: THREE.DoubleSide,
           }),
         );
-        canopy.position.y = 9;
-        g.add(canopy);
+        canopy.position.y = 8.6;
+        canopy.scale.y = 0.62;
+        canopyGroup.add(canopy);
+        const band = new THREE.Mesh(
+          new THREE.SphereGeometry(5.02, 24, 12, 0, Math.PI * 2, Math.PI * 0.32, Math.PI * 0.1),
+          new THREE.MeshStandardMaterial({
+            color: 0xf2ede4,
+            roughness: 0.9,
+            side: THREE.DoubleSide,
+          }),
+        );
+        band.position.y = 8.6;
+        band.scale.y = 0.62;
+        canopyGroup.add(band);
         const lineMat = new THREE.LineBasicMaterial({
           color: 0xcccccc,
           transparent: true,
           opacity: 0.7,
         });
-        for (const a of [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]) {
+        for (let k = 0; k < 6; k++) {
+          const a = (k / 6) * Math.PI * 2;
           const pts = [
-            new THREE.Vector3(0, h / 2, 0),
-            new THREE.Vector3(Math.cos(a) * 4.4, 9.6, Math.sin(a) * 4.4),
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(Math.cos(a) * 4.6, 8.4, Math.sin(a) * 4.6),
           ];
-          g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
+          canopyGroup.add(
+            new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), lineMat),
+          );
         }
+        g.add(canopyGroup);
       }
       break;
     }
@@ -203,6 +245,7 @@ export function buildRocketVisual(
   const height = parts.reduce((s, p) => s + p.def.height, 0);
   const centerY: number[] = new Array(parts.length).fill(0);
   const partGroups: THREE.Group[] = new Array(parts.length);
+  const canopies: CanopyAnim[] = [];
   let y = -height / 2;
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
@@ -211,6 +254,15 @@ export function buildRocketVisual(
     mesh.position.y = centerY[i];
     group.add(mesh);
     partGroups[i] = mesh;
+    const canopy = mesh.getObjectByName('canopy');
+    if (canopy) {
+      canopies.push({
+        group: canopy,
+        source: p as { inflate?: number },
+        base: new THREE.Quaternion(),
+        phase: i * 1.7,
+      });
+    }
     y += p.def.height;
   }
 
@@ -224,19 +276,42 @@ export function buildRocketVisual(
     const slot = slotCount.get(b.hostIndex) ?? 0;
     slotCount.set(b.hostIndex, slot + 1);
     const a = ANGLES[slot % ANGLES.length];
-    const offset = host.def.radius + b.def.radius + 0.06;
-    const mesh = buildPartMesh(b.def, false);
+    const isChute = b.def.type === 'parachute';
+    // tapered hosts (capsules) are narrower where radial gear mounts
+    const hostR =
+      host.def.type === 'capsule' ? host.def.radius * 0.62 : host.def.radius;
+    const offset = hostR + b.def.radius + 0.04;
+    const mesh = buildPartMesh(b.def, isChute && 'deployed' in b ? !!(b as { deployed?: boolean }).deployed : false);
     const hostBottom = centerY[b.hostIndex] - host.def.height / 2;
-    const cy = hostBottom - 0.4 + b.def.height / 2; // hang slightly below host
+    const cy = isChute
+      ? centerY[b.hostIndex] // chutes sit at the host's waist
+      : hostBottom - 0.4 + b.def.height / 2; // boosters hang below
     mesh.position.set(Math.cos(a) * offset, cy, Math.sin(a) * offset);
     group.add(mesh);
-    boosterMounts.push({
-      x: Math.cos(a) * offset,
-      y: cy - b.def.height / 2,
-      z: Math.sin(a) * offset,
-    });
+    const canopy = mesh.getObjectByName('canopy');
+    if (canopy) {
+      // radial canopies tilt away from the stack so pairs don't merge
+      const base = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)),
+        -0.38,
+      );
+      canopy.quaternion.copy(base);
+      canopies.push({
+        group: canopy,
+        source: b as { inflate?: number },
+        base,
+        phase: b.hostIndex * 1.7 + slot * 2.3,
+      });
+    }
+    if (!isChute) {
+      boosterMounts.push({
+        x: Math.cos(a) * offset,
+        y: cy - b.def.height / 2,
+        z: Math.sin(a) * offset,
+      });
+    }
   }
-  return { group, height, boosterMounts, partGroups };
+  return { group, height, boosterMounts, partGroups, canopies };
 }
 
 /** Additive exhaust cone; scale/flicker it from the flight scene. */

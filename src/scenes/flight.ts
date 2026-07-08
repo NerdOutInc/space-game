@@ -10,7 +10,7 @@ import {
 import { buildCampus } from '../render/campus';
 import { Navball } from '../render/navball';
 import { EnginePlume, ReentryParticles } from '../render/particles';
-import { buildFlame, buildRocketVisual } from '../render/rocketMesh';
+import { buildFlame, buildRocketVisual, CanopyAnim } from '../render/rocketMesh';
 import { makeBodyTexture, makeDotTexture, makeStarfield } from '../render/textures';
 import { Controls, Simulation } from '../sim/simulation';
 import { STATE } from '../state';
@@ -30,6 +30,7 @@ const _spin = new THREE.Vector3();
 const _f1 = new THREE.Vector3();
 const _f2 = new THREE.Vector3();
 const _campusMat = new THREE.Matrix4();
+const _swayQ = new THREE.Quaternion();
 
 interface Debris {
   group: THREE.Group;
@@ -77,6 +78,7 @@ export class FlightScene implements GameScene {
   private particles = new ReentryParticles();
   private plume = new EnginePlume();
   private partGroups: THREE.Group[] = [];
+  private canopies: CanopyAnim[] = [];
   private pendingBurst = false;
   private rocketHeight = 0;
   private lastOwnSig = -1;
@@ -749,12 +751,13 @@ export class FlightScene implements GameScene {
 
   private rebuildRocket(): void {
     this.rocketHolder.clear();
-    const { group, height, boosterMounts, partGroups } = buildRocketVisual(
+    const { group, height, boosterMounts, partGroups, canopies } = buildRocketVisual(
       this.vessel.parts,
       [...this.vessel.boosters, ...this.vessel.radialChutes],
     );
     this.rocketHeight = height;
     this.partGroups = partGroups;
+    this.canopies = canopies;
     this.rocketHolder.add(group);
     this.flame.position.y = -height / 2;
     this.rocketHolder.add(this.flame);
@@ -979,6 +982,19 @@ export class FlightScene implements GameScene {
 
     // Rocket
     this.rocketHolder.quaternion.copy(v.q);
+
+    // Canopies inflate with the chute's real inflation state, then sway
+    for (const c of this.canopies) {
+      const f = THREE.MathUtils.clamp(c.source.inflate ?? 1, 0, 1);
+      const e = f * f * (3 - 2 * f); // smooth inflation
+      c.group.scale.set(0.18 + 0.82 * e, 0.28 + 0.72 * e, 0.18 + 0.82 * e);
+      const sway = 0.055 * e;
+      c.group.quaternion.copy(c.base);
+      _swayQ.setFromAxisAngle(_v4.set(1, 0, 0), Math.sin(t * 1.15 + c.phase) * sway);
+      c.group.quaternion.multiply(_swayQ);
+      _swayQ.setFromAxisAngle(_v4.set(0, 0, 1), Math.cos(t * 0.9 + c.phase * 1.3) * sway);
+      c.group.quaternion.multiply(_swayQ);
+    }
     const alt = v.pos.length() - v.body.radius;
     let pr = 0;
     if (v.body.atmosphere && alt < v.body.atmosphere.height) {
