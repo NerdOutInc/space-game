@@ -1,19 +1,17 @@
 import * as THREE from 'three';
 import { Body, HOME } from '../universe/bodies';
 import { PAD_DIR } from '../universe/terrain';
-import {
-  BOOSTER_DEF_ID,
-  CHUTE_DEF_ID,
-  CraftPart,
-  G0,
-  PART_BY_ID,
-  PartDef,
-} from './parts';
+import { CraftDesign, CraftSlot, StageAction, nextUid } from './craft';
+import { G0, PartDef } from './parts';
 
 export interface PartInstance {
+  /** Matches the design slot / radial-group uid it was built from. */
+  uid: number;
   def: PartDef;
   fuel: number;
+  monoprop: number;
   ignited: boolean;
+  /** Parachutes: canopy out. Legs: struts extended. */
   deployed: boolean;
   /** Parachutes: staged and waiting for safe atmosphere conditions. */
   armed: boolean;
@@ -23,15 +21,17 @@ export interface PartInstance {
   inflate?: number;
 }
 
-/** A radially-attached side booster, tied to a stack part by index. */
-export interface BoosterInstance extends PartInstance {
+/** A radially-attached part, tied to a stack part by index. */
+export interface RadialInstance extends PartInstance {
   hostIndex: number;
+  /** Shared by all symmetric copies of one design radial group. */
+  groupUid: number;
 }
 
 export interface StageResult {
   msg: string;
   dropped: PartInstance[] | null;
-  droppedBoosters: BoosterInstance[] | null;
+  droppedRadials: RadialInstance[] | null;
 }
 
 interface EngineFiring {
@@ -40,16 +40,36 @@ interface EngineFiring {
   mdot: number; // kg/s
 }
 
-function newInstance(def: PartDef): PartInstance {
-  return { def, fuel: def.fuel ?? 0, ignited: false, deployed: false, armed: false };
+function newInstance(def: PartDef, uid: number): PartInstance {
+  return {
+    uid,
+    def,
+    fuel: def.fuel ?? 0,
+    monoprop: def.monoprop ?? 0,
+    ignited: false,
+    deployed: false,
+    armed: false,
+  };
+}
+
+function cloneDesign(design: CraftDesign): CraftDesign {
+  return {
+    slots: design.slots.map((s) => ({
+      uid: s.uid,
+      def: s.def,
+      radials: s.radials.map((r) => ({ ...r })),
+    })),
+    stages: design.stages.map((st) => st.map((a) => ({ ...a }))),
+  };
 }
 
 const _upTmp = new THREE.Vector3();
 
 export class Vessel {
   parts: PartInstance[]; // stack, ordered top → bottom
-  boosters: BoosterInstance[] = [];
-  radialChutes: BoosterInstance[] = [];
+  radials: RadialInstance[] = [];
+  /** Remaining stage list; stageQueue[0] is the next Space press. */
+  stageQueue: StageAction[][];
 
   /** Docking link: both vessels reference each other while docked. */
   dockedWith: Vessel | null = null;
@@ -59,7 +79,7 @@ export class Vessel {
 
   name = 'Untitled Craft';
   /** The original build, kept for "revert to launch". */
-  readonly craft: CraftPart[];
+  readonly design: CraftDesign;
 
   body: Body;
   /** Position/velocity relative to `body` center, non-rotating frame. */
@@ -70,6 +90,8 @@ export class Vessel {
 
   throttle = 1;
   sas = true;
+  /** RCS translation enabled (V). */
+  rcsOn = false;
   landed = true;
   destroyed = false;
   /** Aero-thermal skin temperature, K (ambient ~290). */
@@ -84,24 +106,34 @@ export class Vessel {
 
   private hadThrust = false;
 
-  constructor(craft: CraftPart[], body: Body = HOME) {
-    this.craft = craft.map((c) => ({
-      def: c.def,
-      boosters: c.boosters ?? 0,
-      chutes: c.chutes ?? 0,
-    }));
-    this.parts = craft.map((c) => newInstance(c.def));
-    const srb = PART_BY_ID[BOOSTER_DEF_ID];
-    const chute = PART_BY_ID[CHUTE_DEF_ID];
-    craft.forEach((c, i) => {
-      for (let k = 0; k < (c.boosters ?? 0); k++) {
-        this.boosters.push({ ...newInstance(srb), hostIndex: i });
-      }
-      for (let k = 0; k < (c.chutes ?? 0); k++) {
-        this.radialChutes.push({ ...newInstance(chute), hostIndex: i });
+  constructor(design: CraftDesign, body: Body = HOME) {
+    this.design = cloneDesign(design);
+    this.parts = design.slots.map((s) => newInstance(s.def, s.uid));
+    design.slots.forEach((s, i) => {
+      for (const r of s.radials) {
+        for (let k = 0; k < r.count; k++) {
+          this.radials.push({
+            ...newInstance(r.def, nextUid()),
+            hostIndex: i,
+            groupUid: r.uid,
+          });
+        }
       }
     });
+    this.stageQueue = design.stages.map((st) => st.map((a) => ({ ...a })));
+    this.pruneQueue();
     this.body = body;
+  }
+
+  // ---------- structure helpers ----------
+
+  /** Radial SRBs (flame/plume anchors, in radials order). */
+  get boosters(): RadialInstance[] {
+    return this.radials.filter((r) => r.def.type === 'srb');
+  }
+
+  get radialChutes(): RadialInstance[] {
+    return this.radials.filter((r) => r.def.type === 'parachute');
   }
 
   /** All usable parachutes (stack + radial, excluding torn ones). */
@@ -110,62 +142,6 @@ export class Vessel {
       ...this.parts.filter((p) => p.def.type === 'parachute'),
       ...this.radialChutes,
     ].filter((p) => !p.torn);
-  }
-
-  /**
-   * Reentry burn-off: destroy the part on the end that faces the airflow.
-   * Losing the capsule (or the last part) is fatal for the vessel.
-   */
-  burnOffLeading(top: boolean): { name: string; fatal: boolean } | null {
-    if (this.parts.length === 0) return null;
-    const idx = top ? 0 : this.parts.length - 1;
-    const part = this.parts[idx];
-    if (part.def.type === 'capsule' || this.parts.length === 1) {
-      this.destroyed = true;
-      return { name: part.def.name, fatal: true };
-    }
-    const h0 = this.stackHeight();
-    if (top) {
-      this.parts.shift();
-      this.boosters = this.boosters
-        .map((b) => ({ ...b, hostIndex: b.hostIndex - 1 }))
-        .filter((b) => b.hostIndex >= 0);
-      this.radialChutes = this.radialChutes
-        .map((c) => ({ ...c, hostIndex: c.hostIndex - 1 }))
-        .filter((c) => c.hostIndex >= 0);
-    } else {
-      this.parts.pop();
-      const n = this.parts.length;
-      this.boosters = this.boosters.filter((b) => b.hostIndex < n);
-      this.radialChutes = this.radialChutes.filter((c) => c.hostIndex < n);
-    }
-    // keep the surviving parts fixed in world space
-    _upTmp.set(0, 1, 0).applyQuaternion(this.q);
-    this.pos.addScaledVector(_upTmp, ((h0 - this.stackHeight()) / 2) * (top ? -1 : 1));
-    return { name: part.def.name, fatal: false };
-  }
-
-  hasFreeDock(): boolean {
-    return this.parts[0]?.def.type === 'dock' && !this.dockedWith;
-  }
-
-  /** Recompute the rigid link from current poses (docking / save load). */
-  computeDockLink(): void {
-    const o = this.dockedWith;
-    if (!o) return;
-    this.dockOffset = this.stackHeight() / 2 + o.stackHeight() / 2 + 0.1;
-    this.dockRelQ.copy(this.q).invert().multiply(o.q);
-  }
-
-  /** Snap this vessel to its dock partner's pose (partner is authoritative). */
-  followDockPartner(): void {
-    const o = this.dockedWith;
-    if (!o) return;
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(o.q);
-    this.pos.copy(o.pos).addScaledVector(up, o.dockOffset);
-    this.vel.copy(o.vel);
-    this.q.copy(o.q).multiply(o.dockRelQ);
-    this.body = o.body;
   }
 
   /** Part groups split by decouplers, ordered top → bottom (decouplers excluded). */
@@ -189,25 +165,25 @@ export class Vessel {
     return gs[gs.length - 1];
   }
 
-  /** Index of the first stack part in the bottom group. */
-  private bottomGroupStart(): number {
-    return this.parts.map((p) => p.def.type).lastIndexOf('decoupler') + 1;
-  }
-
-  private bottomBoosters(): BoosterInstance[] {
-    const start = this.bottomGroupStart();
-    return this.boosters.filter((b) => b.hostIndex >= start);
+  /** Decoupler-group ordinal of each stack part (0 = top group). */
+  private groupIndexOf(): number[] {
+    const out = new Array<number>(this.parts.length);
+    let g = 0;
+    this.parts.forEach((p, i) => {
+      out[i] = g;
+      if (p.def.type === 'decoupler') g++;
+    });
+    return out;
   }
 
   stageCount(): number {
-    return this.groups().length;
+    return this.stageQueue.length;
   }
 
   mass(): number {
     let m = 0;
-    for (const p of this.parts) m += p.def.dryMass + p.fuel;
-    for (const b of this.boosters) m += b.def.dryMass + b.fuel;
-    for (const c of this.radialChutes) m += c.def.dryMass;
+    for (const p of this.parts) m += p.def.dryMass + p.fuel + p.monoprop;
+    for (const r of this.radials) m += r.def.dryMass + r.fuel + r.monoprop;
     return m;
   }
 
@@ -217,9 +193,12 @@ export class Vessel {
     return h;
   }
 
-  /** Cd·A of the hull (everything except deployed canopies). */
-  bodyDragArea(): number {
-    return 1.5 + this.boosters.length * 0.5 + this.radialChutes.length * 0.2;
+  hasCapsule(): boolean {
+    return this.parts.some((p) => p.def.type === 'capsule');
+  }
+
+  hasFreeDock(): boolean {
+    return this.parts[0]?.def.type === 'dock' && !this.dockedWith;
   }
 
   /**
@@ -243,18 +222,14 @@ export class Vessel {
     let m = 0;
     let my = 0;
     this.parts.forEach((p, i) => {
-      const pm = p.def.dryMass + p.fuel;
+      const pm = p.def.dryMass + p.fuel + p.monoprop;
       m += pm;
       my += pm * ys[i];
     });
-    for (const b of this.boosters) {
-      const bm = b.def.dryMass + b.fuel;
-      m += bm;
-      my += bm * (ys[b.hostIndex] ?? 0);
-    }
-    for (const c of this.radialChutes) {
-      m += c.def.dryMass;
-      my += c.def.dryMass * (ys[c.hostIndex] ?? 0);
+    for (const r of this.radials) {
+      const rm = r.def.dryMass + r.fuel + r.monoprop;
+      m += rm;
+      my += rm * (ys[r.hostIndex] ?? 0);
     }
     return m > 0 ? my / m : 0;
   }
@@ -265,11 +240,23 @@ export class Vessel {
     return Math.max(400, (this.mass() * H * H) / 12);
   }
 
+  /** Cd·A of the hull (everything except deployed canopies). */
+  bodyDragArea(): number {
+    let a = 1.5;
+    for (const r of this.radials) {
+      a += r.def.type === 'srb' ? 0.5 : 0.15;
+    }
+    // a nose cone smooths the stack's leading end
+    if (this.parts.some((p) => p.def.type === 'nose')) a -= 0.4;
+    return Math.max(0.7, a);
+  }
+
   /**
-   * Deployed canopies with their drag and stack-local attachment height
-   * (the canopy rides a couple of meters above its part).
+   * Offset drag surfaces that torque the stack about its CoM: deployed
+   * parachute canopies (huge, above their part) and fins (small, constant —
+   * mounted low they weathervane the rocket into the airstream).
    */
-  chuteAnchors(): Array<{ cda: number; y: number }> {
+  dragAnchors(): Array<{ cda: number; y: number }> {
     const ys = this.partCenterYs();
     const out: Array<{ cda: number; y: number }> = [];
     this.parts.forEach((p, i) => {
@@ -277,37 +264,112 @@ export class Vessel {
         out.push({ cda: 380 * (p.inflate ?? 1), y: ys[i] + p.def.height / 2 + 2 });
       }
     });
-    for (const c of this.radialChutes) {
-      if (c.deployed && !c.torn) {
-        out.push({ cda: 380 * (c.inflate ?? 1), y: (ys[c.hostIndex] ?? 0) + 2 });
+    for (const r of this.radials) {
+      if (r.def.type === 'parachute' && r.deployed && !r.torn) {
+        out.push({ cda: 380 * (r.inflate ?? 1), y: (ys[r.hostIndex] ?? 0) + 2 });
+      } else if (r.def.type === 'fin') {
+        out.push({ cda: r.def.finArea ?? 0.3, y: ys[r.hostIndex] ?? 0 });
       }
     }
     return out;
   }
 
-  hasCapsule(): boolean {
-    return this.parts.some((p) => p.def.type === 'capsule');
+  // ---------- landing legs & RCS ----------
+
+  legParts(): RadialInstance[] {
+    return this.radials.filter((r) => r.def.type === 'legs');
   }
+
+  hasDeployedLegs(): boolean {
+    return this.legParts().some((r) => r.deployed);
+  }
+
+  /** Toggle all landing legs. Returns the new state, or null without legs. */
+  toggleLegs(): boolean | null {
+    const legs = this.legParts();
+    if (legs.length === 0) return null;
+    const next = !legs.some((r) => r.deployed);
+    for (const r of legs) r.deployed = next;
+    return next;
+  }
+
+  /** RCS blocks that still hold monopropellant. */
+  rcsBlocks(): RadialInstance[] {
+    return this.radials.filter((r) => r.def.type === 'rcs' && r.monoprop > 0);
+  }
+
+  rcsThrust(): number {
+    return this.rcsBlocks().reduce((s, r) => s + (r.def.rcsThrust ?? 0), 0);
+  }
+
+  rcsMonopropFraction(): number {
+    let cap = 0;
+    let cur = 0;
+    for (const r of this.radials) {
+      if (r.def.type === 'rcs') {
+        cap += r.def.monoprop ?? 0;
+        cur += r.monoprop;
+      }
+    }
+    return cap > 0 ? cur / cap : 0;
+  }
+
+  consumeMonoprop(kg: number): void {
+    const blocks = this.rcsBlocks();
+    const total = blocks.reduce((s, r) => s + r.monoprop, 0);
+    if (total <= 0) return;
+    const ratio = Math.min(1, kg / total);
+    for (const r of blocks) r.monoprop -= r.monoprop * ratio;
+  }
+
+  // ---------- docking ----------
+
+  /** Recompute the rigid link from current poses (docking / save load). */
+  computeDockLink(): void {
+    const o = this.dockedWith;
+    if (!o) return;
+    this.dockOffset = this.stackHeight() / 2 + o.stackHeight() / 2 + 0.1;
+    this.dockRelQ.copy(this.q).invert().multiply(o.q);
+  }
+
+  /** Snap this vessel to its dock partner's pose (partner is authoritative). */
+  followDockPartner(): void {
+    const o = this.dockedWith;
+    if (!o) return;
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(o.q);
+    this.pos.copy(o.pos).addScaledVector(up, o.dockOffset);
+    this.vel.copy(o.vel);
+    this.q.copy(o.q).multiply(o.dockRelQ);
+    this.body = o.body;
+  }
+
+  // ---------- engines & propellant ----------
 
   /** Engines currently producing thrust, with per-engine mass flow. */
   firingEngines(pressureRatio: number): EngineFiring[] {
-    const bottom = this.bottomGroup();
-    const tankFuel = bottom
-      .filter((p) => p.def.type === 'tank')
-      .reduce((s, p) => s + p.fuel, 0);
+    const gIdx = this.groupIndexOf();
+    const groupFuel = new Map<number, number>();
+    this.parts.forEach((p, i) => {
+      if (p.def.type === 'tank') {
+        groupFuel.set(gIdx[i], (groupFuel.get(gIdx[i]) ?? 0) + p.fuel);
+      }
+    });
     const out: EngineFiring[] = [];
-    const consider = (p: PartInstance) => {
-      if ((p.def.type !== 'engine' && p.def.type !== 'srb') || !p.ignited) return;
+    const consider = (p: PartInstance, avail: number) => {
+      if (!p.ignited) return;
       const lvl = p.def.throttleable === false ? 1 : this.throttle;
-      if (lvl <= 1e-3) return;
-      const avail = p.def.type === 'srb' ? p.fuel : tankFuel;
-      if (avail <= 0) return;
+      if (lvl <= 1e-3 || avail <= 0) return;
       const isp = p.def.ispVac! + (p.def.ispAtm! - p.def.ispVac!) * pressureRatio;
       const thrust = p.def.thrust! * lvl;
       out.push({ part: p, thrust, mdot: thrust / (isp * G0) });
     };
-    for (const p of bottom) consider(p);
-    for (const b of this.boosters) consider(b); // boosters carry their own fuel
+    this.parts.forEach((p, i) => {
+      if (p.def.type === 'engine') consider(p, groupFuel.get(gIdx[i]) ?? 0);
+      else if (p.def.type === 'srb') consider(p, p.fuel);
+    });
+    for (const r of this.radials) {
+      if (r.def.type === 'srb') consider(r, r.fuel); // own fuel
+    }
     return out;
   }
 
@@ -320,23 +382,29 @@ export class Vessel {
     const firing = this.firingEngines(pressureRatio);
     if (firing.length > 0) this.hadThrust = true;
 
-    const bottom = this.bottomGroup();
-    const tanks = bottom.filter((p) => p.def.type === 'tank');
-    let tankDemand = 0;
+    const gIdx = this.groupIndexOf();
+    const engineGroup = new Map<PartInstance, number>();
+    this.parts.forEach((p, i) => {
+      if (p.def.type === 'engine') engineGroup.set(p, gIdx[i]);
+    });
+    const demand = new Map<number, number>(); // group → kg wanted
     for (const f of firing) {
       if (f.part.def.type === 'srb') {
         f.part.fuel = Math.max(0, f.part.fuel - f.mdot * dt);
       } else {
-        tankDemand += f.mdot * dt;
+        const g = engineGroup.get(f.part) ?? 0;
+        demand.set(g, (demand.get(g) ?? 0) + f.mdot * dt);
       }
     }
-    if (tankDemand > 0) {
+    for (const [g, want] of demand) {
+      const tanks: PartInstance[] = [];
+      this.parts.forEach((p, i) => {
+        if (p.def.type === 'tank' && gIdx[i] === g) tanks.push(p);
+      });
       const total = tanks.reduce((s, t) => s + t.fuel, 0);
-      const take = Math.min(tankDemand, total);
-      if (total > 0) {
-        const ratio = take / total;
-        for (const t of tanks) t.fuel -= t.fuel * ratio;
-      }
+      if (total <= 0) continue;
+      const ratio = Math.min(want, total) / total;
+      for (const t of tanks) t.fuel -= t.fuel * ratio;
     }
 
     // Flameout: we were thrusting, engines remain lit, but nothing can fire now.
@@ -352,114 +420,215 @@ export class Vessel {
 
   anyEngineIgnited(): boolean {
     return (
-      this.bottomGroup().some(
+      this.parts.some(
         (p) => (p.def.type === 'engine' || p.def.type === 'srb') && p.ignited,
-      ) || this.boosters.some((b) => b.ignited)
+      ) || this.radials.some((r) => r.def.type === 'srb' && r.ignited)
     );
   }
 
   /** Ignited side boosters that have burned dry (ready to jettison). */
   hasSpentBoosters(): boolean {
+    const bs = this.boosters;
     return (
-      this.boosters.length > 0 &&
-      this.boosters.every((b) => !b.ignited || b.fuel <= 0) &&
-      this.boosters.some((b) => b.ignited && b.fuel <= 0)
+      bs.length > 0 &&
+      bs.every((b) => !b.ignited || b.fuel <= 0) &&
+      bs.some((b) => b.ignited && b.fuel <= 0)
     );
   }
 
-  /** Fuel fraction of the current bottom stage (for the HUD gauge). */
+  /** Fuel fraction feeding the currently ignited engines (HUD gauge). */
   stageFuelFraction(): number {
+    const gIdx = this.groupIndexOf();
+    const activeGroups = new Set<number>();
     let cap = 0;
     let cur = 0;
-    for (const p of this.bottomGroup()) {
-      if (p.def.fuel) {
-        cap += p.def.fuel;
+    this.parts.forEach((p, i) => {
+      if (p.def.type === 'engine' && p.ignited) activeGroups.add(gIdx[i]);
+      if (p.def.type === 'srb' && p.ignited) {
+        cap += p.def.fuel ?? 0;
         cur += p.fuel;
       }
+    });
+    if (activeGroups.size === 0 && cap === 0) {
+      // nothing lit yet: show the bottom group so the pad gauge reads full
+      activeGroups.add(Math.max(0, ...gIdx));
     }
-    for (const b of this.bottomBoosters()) {
-      cap += b.def.fuel ?? 0;
-      cur += b.fuel;
+    this.parts.forEach((p, i) => {
+      if (p.def.type === 'tank' && activeGroups.has(gIdx[i])) {
+        cap += p.def.fuel ?? 0;
+        cur += p.fuel;
+      }
+    });
+    for (const b of this.boosters) {
+      if (b.ignited && b.fuel > 0) {
+        cap += b.def.fuel ?? 0;
+        cur += b.fuel;
+      }
     }
     return cap > 0 ? cur / cap : 0;
   }
 
-  /** What the next Space press will do (for the HUD). */
-  nextStageLabel(): string {
-    const bottom = this.bottomGroup();
-    const engines = bottom.filter(
-      (p) => p.def.type === 'engine' || p.def.type === 'srb',
-    );
-    const unlitCore = engines.some((e) => !e.ignited);
-    const unlitBoosters = this.bottomBoosters().some((b) => !b.ignited);
-    if (unlitCore || unlitBoosters) return 'ignition';
-    if (this.hasSpentBoosters()) return 'drop boosters';
-    if (this.parts.some((p) => p.def.type === 'decoupler')) return 'stage sep';
-    if (this.allChutes().some((p) => !p.deployed && !p.armed)) return 'arm chutes';
-    return '—';
+  // ---------- staging (executes the editable stage list literally) ----------
+
+  /** Resolve a stage action against the LIVE vessel. */
+  private resolveAction(a: StageAction): {
+    stackPart: PartInstance | null;
+    stackIndex: number;
+    groupInstances: RadialInstance[];
+  } {
+    const stackIndex = this.parts.findIndex((p) => p.uid === a.uid);
+    return {
+      stackPart: stackIndex >= 0 ? this.parts[stackIndex] : null,
+      stackIndex,
+      groupInstances: this.radials.filter((r) => r.groupUid === a.uid),
+    };
   }
 
-  /**
-   * Activate the next stage, KSP-style:
-   * ignite → jettison spent boosters → decouple (+auto-ignite) → arm chutes.
-   */
+  /** Drop queue actions that no longer resolve to a live part. */
+  pruneQueue(): void {
+    this.stageQueue = this.stageQueue
+      .map((st) =>
+        st.filter((a) => {
+          const hit = this.resolveAction(a);
+          return hit.stackPart !== null || hit.groupInstances.length > 0;
+        }),
+      )
+      .filter((st) => st.length > 0);
+  }
+
+  /** What the next Space press will do (for the HUD). */
+  nextStageLabel(): string {
+    const next = this.stageQueue[0];
+    if (!next || next.length === 0) return '—';
+    const bits = new Set<string>();
+    for (const a of next) {
+      if (a.kind === 'decouple') bits.add('stage sep');
+      else if (a.kind === 'ignite') bits.add('ignition');
+      else if (a.kind === 'jettison') bits.add('drop boosters');
+      else if (a.kind === 'chute') bits.add('arm chutes');
+    }
+    return [...bits].join(' + ');
+  }
+
+  /** Fire the next stage in the queue, executing every action in it. */
   stage(): StageResult {
-    const none = { dropped: null, droppedBoosters: null };
-    const bottom = this.bottomGroup();
-    const engines = bottom.filter(
-      (p) => p.def.type === 'engine' || p.def.type === 'srb',
-    );
-    const unlit: PartInstance[] = [
-      ...engines.filter((e) => !e.ignited),
-      ...this.bottomBoosters().filter((b) => !b.ignited),
-    ];
-    if (unlit.length > 0) {
-      unlit.forEach((e) => (e.ignited = true));
-      this.hadThrust = false;
-      return { msg: 'Ignition!', ...none };
+    this.pruneQueue();
+    const actions = this.stageQueue.shift();
+    if (!actions || actions.length === 0) {
+      return { msg: 'No stages left', dropped: null, droppedRadials: null };
     }
 
-    if (this.hasSpentBoosters()) {
-      const spent = this.boosters.filter((b) => b.ignited);
-      this.boosters = this.boosters.filter((b) => !b.ignited);
-      return { msg: 'Booster separation', dropped: null, droppedBoosters: spent };
-    }
+    const msgs = new Set<string>();
+    let dropped: PartInstance[] | null = null;
+    let droppedRadials: RadialInstance[] = [];
 
-    const idx = this.parts.map((p) => p.def.type).lastIndexOf('decoupler');
-    if (idx !== -1) {
+    // Decouples first (so ignitions in the same stage light the new bottom),
+    // deepest decoupler wins if the user stacked several in one stage.
+    const decouples = actions
+      .filter((a) => a.kind === 'decouple')
+      .map((a) => this.resolveAction(a).stackIndex)
+      .filter((i) => i >= 0)
+      .sort((x, y) => x - y);
+    if (decouples.length > 0) {
+      const idx = decouples[0]; // topmost listed: drops everything below it
       const h0 = this.stackHeight();
-      const dropped = this.parts.slice(idx); // decoupler goes with the lower half
-      const droppedBoosters = this.boosters.filter((b) => b.hostIndex >= idx);
-      this.boosters = this.boosters.filter((b) => b.hostIndex < idx);
-      this.radialChutes = this.radialChutes.filter((c) => c.hostIndex < idx);
+      dropped = this.parts.slice(idx); // decoupler goes with the lower half
+      droppedRadials.push(...this.radials.filter((r) => r.hostIndex >= idx));
+      this.radials = this.radials.filter((r) => r.hostIndex < idx);
       this.parts = this.parts.slice(0, idx);
       // pos is the stack's geometric center: shift it up so the REMAINING
       // parts keep their world positions (no visual jump on separation)
       _upTmp.set(0, 1, 0).applyQuaternion(this.q);
       this.pos.addScaledVector(_upTmp, (h0 - this.stackHeight()) / 2);
-      // Auto-ignite the new bottom stage's engines and boosters.
-      for (const p of this.bottomGroup()) {
-        if (p.def.type === 'engine' || p.def.type === 'srb') p.ignited = true;
-      }
-      for (const b of this.bottomBoosters()) b.ignited = true;
       this.hadThrust = false;
-      return {
-        msg: 'Stage separation',
-        dropped,
-        droppedBoosters: droppedBoosters.length ? droppedBoosters : null,
-      };
+      msgs.add('Stage separation');
     }
 
-    const unarmed = this.allChutes().filter((p) => !p.deployed && !p.armed);
-    if (unarmed.length > 0) {
-      unarmed.forEach((p) => (p.armed = true));
-      return {
-        msg: `Parachute${unarmed.length > 1 ? 's' : ''} armed — deploys in atmosphere below 40 km`,
-        ...none,
-      };
+    for (const a of actions) {
+      const hit = this.resolveAction(a);
+      switch (a.kind) {
+        case 'ignite': {
+          let lit = false;
+          if (hit.stackPart && !hit.stackPart.ignited) {
+            hit.stackPart.ignited = true;
+            lit = true;
+          }
+          for (const r of hit.groupInstances) {
+            if (!r.ignited) {
+              r.ignited = true;
+              lit = true;
+            }
+          }
+          if (lit) {
+            this.hadThrust = false;
+            msgs.add('Ignition!');
+          }
+          break;
+        }
+        case 'jettison': {
+          if (hit.groupInstances.length > 0) {
+            droppedRadials.push(...hit.groupInstances);
+            this.radials = this.radials.filter(
+              (r) => !hit.groupInstances.includes(r),
+            );
+            msgs.add('Booster separation');
+          }
+          break;
+        }
+        case 'chute': {
+          const targets = [
+            ...(hit.stackPart ? [hit.stackPart] : []),
+            ...hit.groupInstances,
+          ].filter((c) => !c.torn && !c.deployed && !c.armed);
+          if (targets.length > 0) {
+            for (const c of targets) c.armed = true;
+            msgs.add('Parachutes armed — deploy in atmosphere below 40 km');
+          }
+          break;
+        }
+        case 'decouple':
+          break; // handled above
+      }
     }
 
-    return { msg: 'No stages left', ...none };
+    // parts that just left the vessel take their queued actions with them
+    this.pruneQueue();
+
+    return {
+      msg: msgs.size > 0 ? [...msgs].join(' + ') : 'Stage fired',
+      dropped,
+      droppedRadials: droppedRadials.length > 0 ? droppedRadials : null,
+    };
+  }
+
+  /**
+   * Reentry burn-off: destroy the part on the end that faces the airflow.
+   * Losing the capsule (or the last part) is fatal for the vessel.
+   */
+  burnOffLeading(top: boolean): { name: string; fatal: boolean } | null {
+    if (this.parts.length === 0) return null;
+    const idx = top ? 0 : this.parts.length - 1;
+    const part = this.parts[idx];
+    if (part.def.type === 'capsule' || this.parts.length === 1) {
+      this.destroyed = true;
+      return { name: part.def.name, fatal: true };
+    }
+    const h0 = this.stackHeight();
+    if (top) {
+      this.parts.shift();
+      this.radials = this.radials
+        .map((r) => ({ ...r, hostIndex: r.hostIndex - 1 }))
+        .filter((r) => r.hostIndex >= 0);
+    } else {
+      this.parts.pop();
+      const n = this.parts.length;
+      this.radials = this.radials.filter((r) => r.hostIndex < n);
+    }
+    // keep the surviving parts fixed in world space
+    _upTmp.set(0, 1, 0).applyQuaternion(this.q);
+    this.pos.addScaledVector(_upTmp, ((h0 - this.stackHeight()) / 2) * (top ? -1 : 1));
+    this.pruneQueue();
+    return { name: part.def.name, fatal: false };
   }
 
   deployParachute(): boolean {
@@ -481,99 +650,154 @@ export class Vessel {
 // ---------- craft statistics for the VAB ----------
 
 export interface StageStats {
-  index: number; // 1 = first stage to burn (bottom)
+  index: number; // 1 = first stage to fire
   dv: number; // m/s, vacuum Isp
   twr: number; // vs. home-planet surface gravity
   fuel: number; // kg
 }
 
-interface GroupInfo {
-  parts: PartDef[];
-  boosters: number;
-  chutes: number;
-  decouplerAbove: PartDef | null;
-}
+/**
+ * Walk the design's ACTUAL stage list, tracking mass, remaining fuel, and
+ * which parts are still attached — so Δv/TWR reflect the user's staging,
+ * not a geometric guess.
+ */
+export function computeStageStats(design: CraftDesign, g = 9.81): StageStats[] {
+  const slots = design.slots;
+  // live state: remaining fuel per uid, attached set
+  const fuelLeft = new Map<number, number>();
+  const attached = new Set<number>(); // slot + radial-group uids
+  let m0 = 0;
+  slots.forEach((s) => {
+    attached.add(s.uid);
+    fuelLeft.set(s.uid, s.def.fuel ?? 0);
+    m0 += s.def.dryMass + (s.def.fuel ?? 0) + (s.def.monoprop ?? 0);
+    for (const r of s.radials) {
+      attached.add(r.uid);
+      fuelLeft.set(r.uid, (r.def.fuel ?? 0) * r.count);
+      m0 += r.count * (r.def.dryMass + (r.def.fuel ?? 0) + (r.def.monoprop ?? 0));
+    }
+  });
+  const slotIndexOfUid = (uid: number) => slots.findIndex((s) => s.uid === uid);
+  const groupOf = (idx: number) => {
+    let gi = 0;
+    for (let i = 0; i < idx; i++) if (slots[i].def.type === 'decoupler') gi++;
+    return gi;
+  };
+  const lit = new Set<number>(); // ignited uids
 
-function splitGroups(craft: CraftPart[]): GroupInfo[] {
-  const groups: GroupInfo[] = [];
-  let cur: GroupInfo = { parts: [], boosters: 0, chutes: 0, decouplerAbove: null };
-  for (const c of craft) {
-    if (c.def.type === 'decoupler') {
-      groups.push(cur);
-      cur = { parts: [], boosters: 0, chutes: 0, decouplerAbove: c.def };
+  const dropUid = (uid: number) => {
+    if (!attached.has(uid)) return;
+    attached.delete(uid);
+    lit.delete(uid);
+    const si = slotIndexOfUid(uid);
+    if (si >= 0) {
+      const s = slots[si];
+      m0 -= s.def.dryMass + (s.def.monoprop ?? 0) + (fuelLeft.get(uid) ?? 0);
+      for (const r of s.radials) dropUid(r.uid);
     } else {
-      cur.parts.push(c.def);
-      cur.boosters += c.boosters ?? 0;
-      cur.chutes += c.chutes ?? 0;
+      for (const s of slots) {
+        const r = s.radials.find((x) => x.uid === uid);
+        if (r) {
+          m0 -=
+            r.count * (r.def.dryMass + (r.def.monoprop ?? 0)) +
+            (fuelLeft.get(uid) ?? 0);
+          break;
+        }
+      }
     }
-  }
-  groups.push(cur);
-  return groups; // top → bottom
-}
+  };
 
-export function computeStageStats(craft: CraftPart[], g = 9.81): StageStats[] {
-  const srb = PART_BY_ID[BOOSTER_DEF_ID];
-  const chuteDef = PART_BY_ID[CHUTE_DEF_ID];
-  const groups = splitGroups(craft);
-  let m0 = craft.reduce(
-    (s, c) =>
-      s +
-      c.def.dryMass +
-      (c.def.fuel ?? 0) +
-      (c.boosters ?? 0) * (srb.dryMass + (srb.fuel ?? 0)) +
-      (c.chutes ?? 0) * chuteDef.dryMass,
-    0,
-  );
   const stats: StageStats[] = [];
-  for (let gi = groups.length - 1; gi >= 0; gi--) {
-    const grp = groups[gi];
-    const engines = grp.parts.filter((d) => d.type === 'engine' || d.type === 'srb');
-    let thrust = engines.reduce((s, d) => s + (d.thrust ?? 0), 0);
-    let fuel = grp.parts.reduce((s, d) => s + (d.fuel ?? 0), 0);
-    let ispWeighted = engines.reduce((s, d) => s + (d.ispVac ?? 0) * (d.thrust ?? 0), 0);
-    if (grp.boosters > 0) {
-      thrust += grp.boosters * (srb.thrust ?? 0);
-      fuel += grp.boosters * (srb.fuel ?? 0);
-      ispWeighted += grp.boosters * (srb.ispVac ?? 0) * (srb.thrust ?? 0);
+  design.stages.forEach((stage, k) => {
+    // separations first (mass leaves before this stage's engines burn)
+    for (const a of stage) {
+      if (a.kind === 'decouple') {
+        const idx = slotIndexOfUid(a.uid);
+        if (idx < 0 || !attached.has(a.uid)) continue;
+        for (let i = idx; i < slots.length; i++) dropUid(slots[i].uid);
+      } else if (a.kind === 'jettison') {
+        dropUid(a.uid);
+      }
     }
-    const isp = thrust > 0 ? ispWeighted / thrust : 0;
-    const dv =
-      isp > 0 && fuel > 0 && m0 > fuel ? isp * G0 * Math.log(m0 / (m0 - fuel)) : 0;
-    const twr = thrust > 0 ? thrust / (m0 * g) : 0;
-    stats.push({ index: groups.length - gi, dv, twr, fuel });
-    const groupWet =
-      grp.parts.reduce((s, d) => s + d.dryMass + (d.fuel ?? 0), 0) +
-      grp.boosters * (srb.dryMass + (srb.fuel ?? 0)) +
-      grp.chutes * chuteDef.dryMass;
-    m0 -= groupWet + (grp.decouplerAbove?.dryMass ?? 0);
-  }
+    for (const a of stage) {
+      if (a.kind === 'ignite' && attached.has(a.uid)) lit.add(a.uid);
+    }
+    // burn everything lit: engines drain their group's tanks; SRBs their own
+    let thrust = 0;
+    let ispWeighted = 0;
+    let fuel = 0;
+    const drainedGroups = new Set<number>();
+    const drainedSrbs = new Set<number>();
+    for (const uid of lit) {
+      const si = slotIndexOfUid(uid);
+      let def: PartDef | null = null;
+      if (si >= 0) def = slots[si].def;
+      else {
+        for (const s of slots) {
+          const r = s.radials.find((x) => x.uid === uid);
+          if (r) def = r.def;
+        }
+      }
+      if (!def?.thrust) continue;
+      const mult =
+        si < 0
+          ? (slots
+              .flatMap((s) => s.radials)
+              .find((r) => r.uid === uid)?.count ?? 1)
+          : 1;
+      thrust += def.thrust * mult;
+      ispWeighted += (def.ispVac ?? 0) * def.thrust * mult;
+      if (def.type === 'srb') {
+        if (!drainedSrbs.has(uid)) {
+          fuel += fuelLeft.get(uid) ?? 0;
+          drainedSrbs.add(uid);
+        }
+      } else if (si >= 0) {
+        const gi = groupOf(si);
+        if (!drainedGroups.has(gi)) {
+          drainedGroups.add(gi);
+          slots.forEach((s, i) => {
+            if (s.def.type === 'tank' && attached.has(s.uid) && groupOf(i) === gi) {
+              fuel += fuelLeft.get(s.uid) ?? 0;
+            }
+          });
+        }
+      }
+    }
+    if (thrust > 0) {
+      const isp = ispWeighted / thrust;
+      const dv =
+        fuel > 0 && m0 > fuel ? isp * G0 * Math.log(m0 / (m0 - fuel)) : 0;
+      stats.push({ index: k + 1, dv, twr: thrust / (m0 * g), fuel });
+      // consume the fuel (mass drops; tanks/SRBs empty for later stages)
+      for (const uid of drainedSrbs) fuelLeft.set(uid, 0);
+      for (const gi of drainedGroups) {
+        slots.forEach((s, i) => {
+          if (s.def.type === 'tank' && attached.has(s.uid) && groupOf(i) === gi) {
+            fuelLeft.set(s.uid, 0);
+          }
+        });
+      }
+      m0 -= fuel;
+    }
+  });
   return stats;
 }
 
-/** Human-readable stage sequence — one line per Space press. */
-export function describeStages(craft: CraftPart[]): string[] {
-  const groups = splitGroups(craft);
-  const out: string[] = [];
-  const engineNames = (grp: GroupInfo): string[] => {
-    const engines = grp.parts.filter((d) => d.type === 'engine' || d.type === 'srb');
-    const bits = engines.map((e) => e.name.replace(/".*?" /, '').replace(' Engine', ''));
-    if (grp.boosters > 0) bits.push(`${grp.boosters}× side booster`);
-    return bits;
-  };
-  for (let gi = groups.length - 1; gi >= 0; gi--) {
-    const grp = groups[gi];
-    const bits = engineNames(grp);
-    if (gi === groups.length - 1) {
-      // first stage: its own ignition press
-      if (bits.length > 0) out.push(`Ignite ${bits.join(' + ')}`);
-    }
-    if (grp.boosters > 0) out.push('Jettison boosters');
-    if (gi > 0) {
-      const next = engineNames(groups[gi - 1]);
-      out.push(next.length > 0 ? `Decouple + ignite ${next.join(' + ')}` : 'Decouple');
+/** Convenience for legacy sample-craft slot lists. */
+export function designTotals(design: CraftDesign): { mass: number; height: number; partCount: number } {
+  let mass = 0;
+  let partCount = 0;
+  for (const s of design.slots) {
+    mass += s.def.dryMass + (s.def.fuel ?? 0) + (s.def.monoprop ?? 0);
+    partCount++;
+    for (const r of s.radials) {
+      mass += r.count * (r.def.dryMass + (r.def.fuel ?? 0) + (r.def.monoprop ?? 0));
+      partCount += r.count;
     }
   }
-  if (craft.some((c) => c.def.type === 'parachute' || (c.chutes ?? 0) > 0))
-    out.push('Arm parachutes');
-  return out;
+  const height = design.slots.reduce((s, x) => s + x.def.height, 0);
+  return { mass, height, partCount };
 }
+
+export type { CraftSlot };

@@ -106,17 +106,24 @@ export class Autopilot {
       if (v.throttle > 0.02 && !v.anyEngineIgnited()) {
         msgs.push(`Autopilot: ${v.stage().msg}`);
       }
-      if (v.hasSpentBoosters() && v.firingEngines(pr).length > 0) {
+      // Fire a booster-jettison stage as soon as the strap-ons burn dry —
+      // but only when that IS the next stage (respect the user's ordering).
+      const next = v.stageQueue[0];
+      if (
+        v.hasSpentBoosters() &&
+        next?.every((a) => a.kind === 'jettison') &&
+        v.firingEngines(pr).length > 0
+      ) {
         const res = v.stage();
         msgs.push(`Autopilot: ${res.msg}`);
-        if (res.droppedBoosters) sim.droppedBoosters.push(res.droppedBoosters);
+        if (res.droppedRadials) sim.droppedRadials.push(res.droppedRadials);
       }
       if (v.throttle > 0.02 && v.anyEngineIgnited() && v.firingEngines(pr).length === 0) {
-        if (v.stageCount() > 1 || v.hasSpentBoosters()) {
+        if (v.stageQueue.length > 0) {
           const res = v.stage();
           msgs.push(`Autopilot: ${res.msg}`);
           if (res.dropped) sim.dropped.push(res.dropped);
-          if (res.droppedBoosters) sim.droppedBoosters.push(res.droppedBoosters);
+          if (res.droppedRadials) sim.droppedRadials.push(res.droppedRadials);
         } else {
           v.throttle = 0;
           msgs.push('Autopilot: out of propellant — disengaged');
@@ -596,8 +603,10 @@ export class Autopilot {
   /** Estimated seconds of full-throttle burn to circularize at apoapsis. */
   private circBurnTime(v: Vessel, apR: number, semiLatus: number, mu: number): number {
     let thrust = 0;
-    for (const p of v.bottomGroup()) {
-      if (p.def.type === 'engine' || p.def.type === 'srb') thrust += p.def.thrust ?? 0;
+    for (const p of [...v.parts, ...v.radials]) {
+      if ((p.def.type === 'engine' || p.def.type === 'srb') && p.ignited) {
+        thrust += p.def.thrust ?? 0;
+      }
     }
     if (thrust <= 0 || !isFinite(apR)) return 0;
     const h = Math.sqrt(semiLatus * mu); // specific angular momentum

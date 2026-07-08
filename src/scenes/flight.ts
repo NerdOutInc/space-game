@@ -18,7 +18,7 @@ import { BODIES, Body, HELIOS, HOME } from '../universe/bodies';
 import { displacePlanetGeometry, groundHeight, PAD_DIR } from '../universe/terrain';
 import { $, fmtDist, fmtSpeed, fmtTime } from '../util/format';
 import { showToast } from '../util/toast';
-import { BoosterInstance, Vessel } from '../vessel/vessel';
+import { RadialInstance, Vessel } from '../vessel/vessel';
 
 const MAP_SCALE = 1e-6; // meters → map units
 
@@ -499,6 +499,22 @@ export class FlightScene implements GameScene {
         if (msg) this.toast(msg);
         break;
       }
+      case 'KeyV': {
+        const v = this.vessel;
+        if (v.radials.every((r) => r.def.type !== 'rcs')) {
+          this.toast('No RCS blocks fitted');
+        } else {
+          v.rcsOn = !v.rcsOn;
+          this.toast(v.rcsOn ? 'RCS on — IJKL translates' : 'RCS off');
+        }
+        break;
+      }
+      case 'KeyB': {
+        const state = this.vessel.toggleLegs();
+        if (state === null) this.toast('No landing legs fitted');
+        else this.toast(state ? 'Landing legs deployed' : 'Landing legs retracted');
+        break;
+      }
       case 'KeyH':
         if (this.mode === 'map') {
           this.mapFocus = null;
@@ -660,8 +676,8 @@ export class FlightScene implements GameScene {
     const res = this.vessel.stage();
     this.toast(res.msg);
     if (res.dropped) this.spawnDebris(res.dropped);
-    if (res.droppedBoosters) this.spawnBoosterDebris(res.droppedBoosters);
-    if (res.dropped || res.droppedBoosters) this.rebuildRocket();
+    if (res.droppedRadials) this.spawnRadialDebris(res.droppedRadials);
+    if (res.dropped || res.droppedRadials) this.rebuildRocket();
   }
 
   private warp(dir: 1 | -1): void {
@@ -692,8 +708,8 @@ export class FlightScene implements GameScene {
     }
   }
 
-  /** Jettisoned side boosters tumble away sideways. */
-  private spawnBoosterDebris(bs: BoosterInstance[]): void {
+  /** Jettisoned radial parts tumble away sideways. */
+  private spawnRadialDebris(bs: RadialInstance[]): void {
     bs.forEach((b, i) => {
       const { group } = buildRocketVisual([b]);
       this.scene.add(group);
@@ -753,7 +769,7 @@ export class FlightScene implements GameScene {
     this.rocketHolder.clear();
     const { group, height, boosterMounts, partGroups, canopies } = buildRocketVisual(
       this.vessel.parts,
-      [...this.vessel.boosters, ...this.vessel.radialChutes],
+      this.vessel.radials,
     );
     this.rocketHeight = height;
     this.partGroups = partGroups;
@@ -804,6 +820,9 @@ export class FlightScene implements GameScene {
       pitch: (keys.has('KeyW') ? 1 : 0) + (keys.has('KeyS') ? -1 : 0),
       yaw: (keys.has('KeyA') ? 1 : 0) + (keys.has('KeyD') ? -1 : 0),
       roll: (keys.has('KeyQ') ? 1 : 0) + (keys.has('KeyE') ? -1 : 0),
+      // RCS translation (IJKL, with RCS blocks and V toggled on)
+      rcsX: (keys.has('KeyL') ? 1 : 0) + (keys.has('KeyJ') ? -1 : 0),
+      rcsZ: (keys.has('KeyK') ? 1 : 0) + (keys.has('KeyI') ? -1 : 0),
     };
 
     const t0 = STATE.t;
@@ -822,10 +841,10 @@ export class FlightScene implements GameScene {
 
     // Autopilot staging happens inside the sim — pick up the wreckage.
     const dropped = this.sim.dropped.splice(0);
-    const droppedBoosters = this.sim.droppedBoosters.splice(0);
-    if (dropped.length > 0 || droppedBoosters.length > 0) {
+    const droppedRadials = this.sim.droppedRadials.splice(0);
+    if (dropped.length > 0 || droppedRadials.length > 0) {
       for (const parts of dropped) this.spawnDebris(parts);
-      for (const bs of droppedBoosters) this.spawnBoosterDebris(bs);
+      for (const bs of droppedRadials) this.spawnRadialDebris(bs);
       this.rebuildRocket();
     }
 
@@ -833,7 +852,11 @@ export class FlightScene implements GameScene {
     // above, but chute deploys/tears and reentry burn-offs happen in the sim.
     const chutes = v.deployedChutes();
     const ownSig =
-      v.parts.length * 10_000 + v.boosters.length * 100 + chutes * 10 + v.allChutes().length;
+      (v.hasDeployedLegs() ? 1_000_000 : 0) +
+      v.parts.length * 10_000 +
+      v.radials.length * 100 +
+      chutes * 10 +
+      v.allChutes().length;
     if (ownSig !== this.lastOwnSig) {
       const prevChutes = Math.floor((this.lastOwnSig % 100) / 10);
       if (this.lastOwnSig >= 0 && chutes > prevChutes) AUDIO.playOneShot('chuteOpen', 0.9);
@@ -1092,14 +1115,12 @@ export class FlightScene implements GameScene {
         this.dropNearby(o);
         continue;
       }
-      const sig = o.parts.length * 100 + o.deployedChutes();
+      const sig =
+        o.parts.length * 1000 + o.radials.length * 10 + o.deployedChutes();
       let vis = this.nearby.get(o);
       if (!vis || vis.sig !== sig) {
         this.dropNearby(o);
-        const { group } = buildRocketVisual(o.parts, [
-          ...o.boosters,
-          ...o.radialChutes,
-        ]);
+        const { group } = buildRocketVisual(o.parts, o.radials);
         this.scene.add(group);
         vis = { group, sig };
         this.nearby.set(o, vis);
@@ -1514,6 +1535,7 @@ export class FlightScene implements GameScene {
     $('fuel-fill').style.width = `${ff * 100}%`;
 
     $('sas-ind').classList.toggle('on', v.sas);
+    $('rcs-ind').classList.toggle('on', v.rcsOn);
     $('ap-ind').classList.toggle('on', this.sim.autopilot.active);
     $('stage-ind').textContent = `STAGE ${v.stageCount()}`;
     $('next-ind').textContent = `␣ ${v.nextStageLabel()}`;

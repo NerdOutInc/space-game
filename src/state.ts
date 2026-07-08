@@ -2,8 +2,17 @@ import * as THREE from 'three';
 import { propagateKepler } from './math/kepler';
 import { BODIES, HOME } from './universe/bodies';
 import { PAD_DIR } from './universe/terrain';
-import { BOOSTER_DEF_ID, PartDef, PART_BY_ID } from './vessel/parts';
-import { Vessel } from './vessel/vessel';
+import {
+  CraftDesign,
+  CraftSlot,
+  RadialGroup,
+  StageAction,
+  defaultStages,
+  findByUid,
+  nextUid,
+} from './vessel/craft';
+import { PART_BY_ID, PartDef } from './vessel/parts';
+import { PartInstance, RadialInstance, Vessel } from './vessel/vessel';
 
 /**
  * Universal time at which the sun sits ~30° above the launch site's eastern
@@ -56,22 +65,43 @@ export const MILESTONE_DEFS: Record<string, { name: string; pts: number }> = {
 
 export type GameMode = 'science' | 'freedom';
 
+// ---------- save format ----------
+
 interface SavedPart {
   id: string;
   fuel: number;
+  mono?: number;
   ignited: boolean;
   deployed: boolean;
   armed?: boolean;
   torn?: boolean;
 }
 
-interface SavedBooster {
+interface SavedRadial extends SavedPart {
+  host: number; // stack index
+  g: number; // radial-group ordinal (symmetric copies share one)
+}
+
+/** Stage action reference: p = stack part index, g = radial-group ordinal. */
+interface SavedAction {
+  k: StageAction['kind'];
+  p?: number;
+  g?: number;
+}
+
+interface SavedDesign {
+  slots: Array<{ id: string; radials?: Array<{ id: string; count: number }> }>;
+  /** Refs are (slot index s, radial index r within the slot). */
+  stages: Array<Array<{ k: StageAction['kind']; s: number; r?: number }>>;
+}
+
+// v1–v3 legacy shapes
+interface SavedBoosterV3 {
   hostIndex: number;
   fuel: number;
   ignited: boolean;
 }
-
-interface SavedRadialChute {
+interface SavedRadialChuteV3 {
   hostIndex: number;
   deployed: boolean;
   armed: boolean;
@@ -90,18 +120,23 @@ interface SavedVessel {
   reachedSpace: boolean;
   launchedAt: number | null;
   throttle: number;
-  craft: Array<{ id: string; boosters: number; chutes?: number }>;
+  rcsOn?: boolean;
   parts: SavedPart[];
-  boosters: SavedBooster[];
-  radialChutes?: SavedRadialChute[];
   /** Index of the docked partner in the vessels array, or -1. */
   docked?: number;
-  /** v1 saves stored the craft as a flat list of part ids. */
+  // ---- v4 ----
+  design?: SavedDesign;
+  radials?: SavedRadial[];
+  queue?: SavedAction[][];
+  // ---- v1–v3 ----
+  craft?: Array<{ id: string; boosters: number; chutes?: number }>;
+  boosters?: SavedBoosterV3[];
+  radialChutes?: SavedRadialChuteV3[];
   defs?: string[];
 }
 
 interface SaveData {
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   t: number;
   counter: number;
   science: number;
@@ -110,6 +145,56 @@ interface SaveData {
   vessels: SavedVessel[];
   mode?: GameMode;
   savedAt?: number;
+}
+
+// ---------- design (de)serialization ----------
+
+export function serializeDesign(design: CraftDesign): SavedDesign {
+  return {
+    slots: design.slots.map((s) => ({
+      id: s.def.id,
+      radials: s.radials.map((r) => ({ id: r.def.id, count: r.count })),
+    })),
+    stages: design.stages.map((st) =>
+      st.flatMap((a) => {
+        const hit = findByUid(design.slots, a.uid);
+        if (!hit) return [];
+        return hit.radial
+          ? [{ k: a.kind, s: hit.index, r: hit.slot.radials.indexOf(hit.radial) }]
+          : [{ k: a.kind, s: hit.index }];
+      }),
+    ),
+  };
+}
+
+export function deserializeDesign(sd: SavedDesign): CraftDesign {
+  const slots: CraftSlot[] = [];
+  for (const ss of sd.slots) {
+    const def = PART_BY_ID[ss.id];
+    if (!def) continue;
+    const radials: RadialGroup[] = [];
+    for (const sr of ss.radials ?? []) {
+      const rdef = PART_BY_ID[sr.id];
+      if (rdef) radials.push({ uid: nextUid(), def: rdef, count: sr.count });
+    }
+    slots.push({ uid: nextUid(), def, radials });
+  }
+  const stages: StageAction[][] = (sd.stages ?? [])
+    .map((st) =>
+      st.flatMap((a): StageAction[] => {
+        const slot = slots[a.s];
+        if (!slot) return [];
+        if (a.r != null) {
+          const r = slot.radials[a.r];
+          return r ? [{ kind: a.k, uid: r.uid }] : [];
+        }
+        return [{ kind: a.k, uid: slot.uid }];
+      }),
+    )
+    .filter((st) => st.length > 0);
+  const design: CraftDesign = { slots, stages };
+  if (design.stages.length === 0) design.stages = defaultStages(slots);
+  return design;
 }
 
 /**
@@ -292,7 +377,7 @@ export class GameState {
       this.activeSlot = `${SLOT_PREFIX}${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
     }
     const data: SaveData = {
-      version: 3,
+      version: 4,
       t: this.t,
       counter: this.counter,
       science: this.science,
@@ -300,44 +385,52 @@ export class GameState {
       unlocked: [...this.unlocked],
       mode: this.mode,
       savedAt: Date.now(),
-      vessels: this.vessels.map((v) => ({
-        name: v.name,
-        body: v.body.name,
-        pos: v.pos.toArray(),
-        vel: v.vel.toArray(),
-        q: v.q.toArray() as number[],
-        landedDir: v.landedDir.toArray(),
-        landed: v.landed,
-        destroyed: v.destroyed,
-        reachedSpace: v.reachedSpace,
-        launchedAt: v.launchedAt,
-        throttle: v.throttle,
-        craft: v.craft.map((c) => ({
-          id: c.def.id,
-          boosters: c.boosters,
-          chutes: c.chutes,
-        })),
-        parts: v.parts.map((p) => ({
+      vessels: this.vessels.map((v) => {
+        // symmetric radial copies share a groupUid; persist group ordinals
+        const groupOrder: number[] = [];
+        for (const r of v.radials) {
+          if (!groupOrder.includes(r.groupUid)) groupOrder.push(r.groupUid);
+        }
+        const savePart = (p: PartInstance): SavedPart => ({
           id: p.def.id,
           fuel: p.fuel,
+          mono: p.monoprop || undefined,
           ignited: p.ignited,
           deployed: p.deployed,
           armed: p.armed,
           torn: p.torn,
-        })),
-        boosters: v.boosters.map((b) => ({
-          hostIndex: b.hostIndex,
-          fuel: b.fuel,
-          ignited: b.ignited,
-        })),
-        radialChutes: v.radialChutes.map((c) => ({
-          hostIndex: c.hostIndex,
-          deployed: c.deployed,
-          armed: c.armed,
-          torn: c.torn,
-        })),
-        docked: v.dockedWith ? this.vessels.indexOf(v.dockedWith) : -1,
-      })),
+        });
+        return {
+          name: v.name,
+          body: v.body.name,
+          pos: v.pos.toArray(),
+          vel: v.vel.toArray(),
+          q: v.q.toArray() as number[],
+          landedDir: v.landedDir.toArray(),
+          landed: v.landed,
+          destroyed: v.destroyed,
+          reachedSpace: v.reachedSpace,
+          launchedAt: v.launchedAt,
+          throttle: v.throttle,
+          rcsOn: v.rcsOn,
+          design: serializeDesign(v.design),
+          parts: v.parts.map(savePart),
+          radials: v.radials.map((r) => ({
+            ...savePart(r),
+            host: r.hostIndex,
+            g: groupOrder.indexOf(r.groupUid),
+          })),
+          queue: v.stageQueue.map((st) =>
+            st.flatMap((a): SavedAction[] => {
+              const pi = v.parts.findIndex((p) => p.uid === a.uid);
+              if (pi >= 0) return [{ k: a.kind, p: pi }];
+              const gi = groupOrder.indexOf(a.uid);
+              return gi >= 0 ? [{ k: a.kind, g: gi }] : [];
+            }),
+          ),
+          docked: v.dockedWith ? this.vessels.indexOf(v.dockedWith) : -1,
+        };
+      }),
     };
     try {
       localStorage.setItem(this.activeSlot, JSON.stringify(data));
@@ -358,7 +451,7 @@ export class GameState {
     if (!raw) return false;
     try {
       const data = JSON.parse(raw) as SaveData;
-      if (data.version !== 1 && data.version !== 2 && data.version !== 3) return false;
+      if (data.version < 1 || data.version > 4) return false;
       this.t = data.t;
       this.counter = data.counter;
       this.science = data.science;
@@ -366,59 +459,10 @@ export class GameState {
       this.unlocked = new Set(data.unlocked);
       this.mode = data.mode ?? 'science';
       this.vessels = [];
-      const srb = PART_BY_ID[BOOSTER_DEF_ID];
-      const chuteDef = PART_BY_ID['parachute'];
       for (const sv of data.vessels) {
-        // v1 stored a flat part-id list; v2 stores craft slots with boosters
-        const craftIds = sv.craft ?? (sv.defs ?? []).map((id) => ({ id, boosters: 0 }));
-        const craft = craftIds
-          .filter((c) => PART_BY_ID[c.id])
-          .map((c) => ({
-            def: PART_BY_ID[c.id],
-            boosters: c.boosters ?? 0,
-            chutes: c.chutes ?? 0,
-          }));
-        if (craft.length === 0) continue;
-        const body = BODIES.find((b) => b.name === sv.body) ?? HOME;
-        const v = new Vessel(craft, body);
-        v.name = sv.name;
-        v.pos.fromArray(sv.pos);
-        v.vel.fromArray(sv.vel);
-        v.q.fromArray(sv.q);
-        v.landedDir.fromArray(sv.landedDir);
-        v.landed = sv.landed;
-        v.destroyed = sv.destroyed;
-        v.reachedSpace = sv.reachedSpace;
-        v.launchedAt = sv.launchedAt;
-        v.throttle = sv.throttle;
-        v.parts = sv.parts
-          .filter((p) => PART_BY_ID[p.id])
-          .map((p) => ({
-            def: PART_BY_ID[p.id],
-            fuel: p.fuel,
-            ignited: p.ignited,
-            deployed: p.deployed,
-            armed: p.armed ?? false,
-            torn: p.torn ?? false,
-          }));
-        v.boosters = (sv.boosters ?? []).map((b) => ({
-          def: srb,
-          fuel: b.fuel,
-          ignited: b.ignited,
-          deployed: false,
-          armed: false,
-          hostIndex: b.hostIndex,
-        }));
-        v.radialChutes = (sv.radialChutes ?? []).map((c) => ({
-          def: chuteDef,
-          fuel: 0,
-          ignited: false,
-          deployed: c.deployed,
-          armed: c.armed,
-          torn: c.torn ?? false,
-          hostIndex: c.hostIndex,
-        }));
-        this.vessels.push(v);
+        const v =
+          data.version === 4 ? this.loadVesselV4(sv) : this.loadVesselLegacy(sv);
+        if (v) this.vessels.push(v);
       }
       // Re-link docked pairs now that every vessel exists.
       data.vessels.forEach((sv, i) => {
@@ -437,6 +481,180 @@ export class GameState {
     } catch {
       return false;
     }
+  }
+
+  private restoreCommon(v: Vessel, sv: SavedVessel): void {
+    v.name = sv.name;
+    v.pos.fromArray(sv.pos);
+    v.vel.fromArray(sv.vel);
+    v.q.fromArray(sv.q);
+    v.landedDir.fromArray(sv.landedDir);
+    v.landed = sv.landed;
+    v.destroyed = sv.destroyed;
+    v.reachedSpace = sv.reachedSpace;
+    v.launchedAt = sv.launchedAt;
+    v.throttle = sv.throttle;
+    v.rcsOn = sv.rcsOn ?? false;
+  }
+
+  private loadVesselV4(sv: SavedVessel): Vessel | null {
+    if (!sv.design) return null;
+    const design = deserializeDesign(sv.design);
+    if (design.slots.length === 0) return null;
+    const body = BODIES.find((b) => b.name === sv.body) ?? HOME;
+    const v = new Vessel(design, body);
+    this.restoreCommon(v, sv);
+
+    const mkPart = (sp: SavedPart, def: PartDef): PartInstance => ({
+      uid: nextUid(),
+      def,
+      fuel: sp.fuel,
+      monoprop: sp.mono ?? 0,
+      ignited: sp.ignited,
+      deployed: sp.deployed,
+      armed: sp.armed ?? false,
+      torn: sp.torn ?? false,
+    });
+    v.parts = sv.parts
+      .filter((p) => PART_BY_ID[p.id])
+      .map((p) => mkPart(p, PART_BY_ID[p.id]));
+    if (v.parts.length === 0) return null;
+
+    const groupUidByOrdinal = new Map<number, number>();
+    v.radials = (sv.radials ?? [])
+      .filter((r) => PART_BY_ID[r.id])
+      .map((r) => {
+        if (!groupUidByOrdinal.has(r.g)) groupUidByOrdinal.set(r.g, nextUid());
+        return {
+          ...mkPart(r, PART_BY_ID[r.id]),
+          hostIndex: r.host,
+          groupUid: groupUidByOrdinal.get(r.g)!,
+        };
+      });
+    v.stageQueue = (sv.queue ?? [])
+      .map((st) =>
+        st.flatMap((a): StageAction[] => {
+          if (a.p != null && v.parts[a.p]) {
+            return [{ kind: a.k, uid: v.parts[a.p].uid }];
+          }
+          if (a.g != null && groupUidByOrdinal.has(a.g)) {
+            return [{ kind: a.k, uid: groupUidByOrdinal.get(a.g)! }];
+          }
+          return [];
+        }),
+      )
+      .filter((st) => st.length > 0);
+    return v;
+  }
+
+  /** v1–v3: counted radial boosters/chutes, implicit heuristic staging. */
+  private loadVesselLegacy(sv: SavedVessel): Vessel | null {
+    const craftIds =
+      sv.craft ?? (sv.defs ?? []).map((id) => ({ id, boosters: 0, chutes: 0 }));
+    const slots: CraftSlot[] = [];
+    for (const c of craftIds) {
+      const def = PART_BY_ID[c.id];
+      if (!def) continue;
+      const radials: RadialGroup[] = [];
+      if (c.boosters) {
+        radials.push({ uid: nextUid(), def: PART_BY_ID['srb'], count: c.boosters });
+      }
+      if (c.chutes) {
+        radials.push({
+          uid: nextUid(),
+          def: PART_BY_ID['parachute'],
+          count: c.chutes,
+        });
+      }
+      slots.push({ uid: nextUid(), def, radials });
+    }
+    if (slots.length === 0) return null;
+    const design: CraftDesign = { slots, stages: defaultStages(slots) };
+    const body = BODIES.find((b) => b.name === sv.body) ?? HOME;
+    const v = new Vessel(design, body);
+    this.restoreCommon(v, sv);
+
+    v.parts = sv.parts
+      .filter((p) => PART_BY_ID[p.id])
+      .map((p) => ({
+        uid: nextUid(),
+        def: PART_BY_ID[p.id],
+        fuel: p.fuel,
+        monoprop: 0,
+        ignited: p.ignited,
+        deployed: p.deployed,
+        armed: p.armed ?? false,
+        torn: p.torn ?? false,
+      }));
+    if (v.parts.length === 0) return null;
+
+    // Rebuild live radials, grouping same-host copies into one stage group.
+    v.radials = [];
+    const srb = PART_BY_ID['srb'];
+    const chuteDef = PART_BY_ID['parachute'];
+    const boosterGroup = new Map<number, number>();
+    for (const b of sv.boosters ?? []) {
+      if (!boosterGroup.has(b.hostIndex)) boosterGroup.set(b.hostIndex, nextUid());
+      v.radials.push({
+        uid: nextUid(),
+        def: srb,
+        fuel: b.fuel,
+        monoprop: 0,
+        ignited: b.ignited,
+        deployed: false,
+        armed: false,
+        hostIndex: b.hostIndex,
+        groupUid: boosterGroup.get(b.hostIndex)!,
+      });
+    }
+    const chuteGroup = new Map<number, number>();
+    for (const c of sv.radialChutes ?? []) {
+      if (!chuteGroup.has(c.hostIndex)) chuteGroup.set(c.hostIndex, nextUid());
+      v.radials.push({
+        uid: nextUid(),
+        def: chuteDef,
+        fuel: 0,
+        monoprop: 0,
+        ignited: false,
+        deployed: c.deployed,
+        armed: c.armed,
+        torn: c.torn ?? false,
+        hostIndex: c.hostIndex,
+        groupUid: chuteGroup.get(c.hostIndex)!,
+      });
+    }
+
+    // Regenerate a stage queue for the LIVE structure, dropping actions
+    // that already happened (lit engines, armed/opened chutes).
+    const liveSlots: CraftSlot[] = v.parts.map((p, i) => {
+      const radials: RadialGroup[] = [];
+      const seen = new Set<number>();
+      for (const r of v.radials) {
+        if (r.hostIndex === i && !seen.has(r.groupUid)) {
+          seen.add(r.groupUid);
+          radials.push({
+            uid: r.groupUid,
+            def: r.def,
+            count: v.radials.filter((x) => x.groupUid === r.groupUid).length,
+          });
+        }
+      }
+      return { uid: p.uid, def: p.def, radials };
+    });
+    const stale = (a: StageAction): boolean => {
+      const findLive = (uid: number) =>
+        v.parts.find((p) => p.uid === uid) ??
+        v.radials.find((r) => r.groupUid === uid);
+      const t = findLive(a.uid);
+      if (!t) return true;
+      if (a.kind === 'ignite') return t.ignited;
+      if (a.kind === 'chute') return t.armed || t.deployed || !!t.torn;
+      return false;
+    };
+    v.stageQueue = defaultStages(liveSlots)
+      .map((st) => st.filter((a) => !stale(a)))
+      .filter((st) => st.length > 0);
+    return v;
   }
 }
 

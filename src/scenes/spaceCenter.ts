@@ -106,10 +106,7 @@ export class SpaceCenterScene implements GameScene {
       this.padVisual = null;
     }
     if (occ) {
-      const { group, height } = buildRocketVisual(occ.parts, [
-        ...occ.boosters,
-        ...occ.radialChutes,
-      ]);
+      const { group, height } = buildRocketVisual(occ.parts, occ.radials);
       group.position.set(0, 2.4 + height / 2, 0);
       this.scene.add(group);
       this.padVisual = group;

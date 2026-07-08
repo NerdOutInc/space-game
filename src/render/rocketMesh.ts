@@ -24,6 +24,8 @@ export interface RocketVisual {
   boosterMounts: BoosterMount[];
   /** Per-stack-part mesh groups (index-aligned with the parts array). */
   partGroups: THREE.Group[];
+  /** Every radial part mesh with its group id (VAB hit-testing). */
+  radialMeshes: Array<{ mesh: THREE.Object3D; groupUid?: number }>;
   /** Deployed parachute canopies, ready for animation. */
   canopies: CanopyAnim[];
 }
@@ -32,7 +34,7 @@ function metal(color: number, rough = 0.55): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: 0.35 });
 }
 
-function buildPartMesh(def: PartDef, deployed: boolean): THREE.Group {
+export function buildPartMesh(def: PartDef, deployed: boolean): THREE.Group {
   const g = new THREE.Group();
   const r = def.radius;
   const h = def.height;
@@ -229,17 +231,114 @@ function buildPartMesh(def: PartDef, deployed: boolean): THREE.Group {
       g.add(band);
       break;
     }
+    case 'nose': {
+      const cone = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, r, h, 24),
+        metal(0xd8dde2, 0.45),
+      );
+      g.add(cone);
+      const stripe = new THREE.Mesh(
+        new THREE.CylinderGeometry(r * 0.55, r * 0.75, h * 0.2, 24),
+        metal(0xc23b22, 0.5),
+      );
+      stripe.position.y = h * 0.12;
+      g.add(stripe);
+      break;
+    }
+    case 'adapter': {
+      const taper = new THREE.Mesh(
+        new THREE.CylinderGeometry(r * 0.68, r, h, 24),
+        metal(0x9aa3ad, 0.6),
+      );
+      g.add(taper);
+      break;
+    }
+    case 'fin': {
+      // swept blade extending +X (placement yaws it outward)
+      const blade = new THREE.Mesh(
+        new THREE.BoxGeometry(0.6, h, 0.055),
+        metal(0xb8442f, 0.6),
+      );
+      blade.position.x = 0.3;
+      blade.rotation.z = -0.22;
+      g.add(blade);
+      const root = new THREE.Mesh(
+        new THREE.BoxGeometry(0.1, h * 0.85, 0.12),
+        metal(0x2f3540, 0.7),
+      );
+      root.position.x = 0.03;
+      g.add(root);
+      break;
+    }
+    case 'rcs': {
+      const block = new THREE.Mesh(
+        new THREE.BoxGeometry(0.26, 0.26, 0.26),
+        metal(0xe8e4dc, 0.5),
+      );
+      g.add(block);
+      const nozzleMat = metal(0x23262c, 0.4);
+      for (const [dy, dz] of [
+        [0.16, 0],
+        [-0.16, 0],
+        [0, 0.16],
+        [0, -0.16],
+      ]) {
+        const noz = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.03, 0.055, 0.09, 8),
+          nozzleMat,
+        );
+        noz.position.set(0.06, dy, dz);
+        if (dz !== 0) noz.rotation.x = dz > 0 ? -Math.PI / 2 : Math.PI / 2;
+        else if (dy < 0) noz.rotation.x = Math.PI;
+        g.add(noz);
+      }
+      break;
+    }
+    case 'legs': {
+      // strut pivots at the top mount; deployed swings it out to a stance
+      const mount = new THREE.Mesh(
+        new THREE.BoxGeometry(0.14, 0.3, 0.18),
+        metal(0x2f3540, 0.7),
+      );
+      mount.position.y = h * 0.38;
+      g.add(mount);
+      const strut = new THREE.Group();
+      strut.position.y = h * 0.3;
+      const upper = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.05, h * 0.9, 10),
+        metal(0xc7cbd1, 0.4),
+      );
+      upper.position.y = -h * 0.45;
+      strut.add(upper);
+      const foot = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.2, 0.07, 12),
+        metal(0x2f3540, 0.7),
+      );
+      foot.position.y = -h * 0.9;
+      strut.add(foot);
+      // deployed: swing outward (+X) and down for a wide stance
+      strut.rotation.z = deployed ? 0.55 : 0.02;
+      g.add(strut);
+      break;
+    }
   }
   return g;
 }
 
 /**
  * Build meshes for a part stack (ordered top → bottom), centered vertically
- * on the group's origin, plus any radially-attached side boosters.
+ * on the group's origin, plus any radially-attached parts (boosters, chutes,
+ * fins, legs, RCS…). Radials may carry a groupUid so symmetric copies of one
+ * attachment spread evenly around their host.
  */
 export function buildRocketVisual(
   parts: Array<PartInstance | { def: PartDef; deployed?: boolean }>,
-  boosters: Array<{ def: PartDef; hostIndex: number }> = [],
+  radials: Array<{
+    def: PartDef;
+    hostIndex: number;
+    deployed?: boolean;
+    groupUid?: number;
+  }> = [],
 ): RocketVisual {
   const group = new THREE.Group();
   const height = parts.reduce((s, p) => s + p.def.height, 0);
@@ -266,52 +365,96 @@ export function buildRocketVisual(
     y += p.def.height;
   }
 
-  // Radial boosters: symmetric around the host (±X first, then ±Z)
+  // Radial attachments: cluster symmetric copies (same group / same def on
+  // one host) and spread each cluster evenly around its host. Successive
+  // clusters on a host start at rotated offsets so pairs interleave
+  // (boosters ±X, chutes ±Z, …) instead of stacking on one side.
   const boosterMounts: BoosterMount[] = [];
-  const slotCount = new Map<number, number>();
-  const ANGLES = [0, Math.PI, Math.PI / 2, (3 * Math.PI) / 2];
-  for (const b of boosters) {
-    const host = parts[b.hostIndex];
+  const radialMeshes: RocketVisual['radialMeshes'] = [];
+  type RadialIn = (typeof radials)[number];
+  const clusters = new Map<string, RadialIn[]>();
+  const clusterOrder: string[] = [];
+  radials.forEach((r) => {
+    const key = r.groupUid != null ? `g${r.groupUid}` : `h${r.hostIndex}:${r.def.id}`;
+    if (!clusters.has(key)) {
+      clusters.set(key, []);
+      clusterOrder.push(key);
+    }
+    clusters.get(key)!.push(r);
+  });
+  const OFFSETS = [0, Math.PI / 2, Math.PI / 4, (3 * Math.PI) / 4];
+  const hostClusterCount = new Map<number, number>();
+  // SRB mounts must be emitted in the same order as the input list (flame
+  // anchors index into the vessel's radial-SRB order), so collect per-part.
+  const srbMounts = new Map<RadialIn, BoosterMount>();
+  for (const key of clusterOrder) {
+    const members = clusters.get(key)!;
+    const hostIndex = members[0].hostIndex;
+    const host = parts[hostIndex];
     if (!host) continue;
-    const slot = slotCount.get(b.hostIndex) ?? 0;
-    slotCount.set(b.hostIndex, slot + 1);
-    const a = ANGLES[slot % ANGLES.length];
-    const isChute = b.def.type === 'parachute';
-    // tapered hosts (capsules) are narrower where radial gear mounts
-    const hostR =
-      host.def.type === 'capsule' ? host.def.radius * 0.62 : host.def.radius;
-    const offset = hostR + b.def.radius + 0.04;
-    const mesh = buildPartMesh(b.def, isChute && 'deployed' in b ? !!(b as { deployed?: boolean }).deployed : false);
-    const hostBottom = centerY[b.hostIndex] - host.def.height / 2;
-    const cy = isChute
-      ? centerY[b.hostIndex] // chutes sit at the host's waist
-      : hostBottom - 0.4 + b.def.height / 2; // boosters hang below
-    mesh.position.set(Math.cos(a) * offset, cy, Math.sin(a) * offset);
-    group.add(mesh);
-    const canopy = mesh.getObjectByName('canopy');
-    if (canopy) {
-      // radial canopies tilt away from the stack so pairs don't merge
-      const base = new THREE.Quaternion().setFromAxisAngle(
-        new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)),
-        -0.38,
-      );
-      canopy.quaternion.copy(base);
-      canopies.push({
-        group: canopy,
-        source: b as { inflate?: number },
-        base,
-        phase: b.hostIndex * 1.7 + slot * 2.3,
-      });
-    }
-    if (!isChute) {
-      boosterMounts.push({
-        x: Math.cos(a) * offset,
-        y: cy - b.def.height / 2,
-        z: Math.sin(a) * offset,
-      });
-    }
+    const ordinal = hostClusterCount.get(hostIndex) ?? 0;
+    hostClusterCount.set(hostIndex, ordinal + 1);
+    const baseA = OFFSETS[ordinal % OFFSETS.length];
+    members.forEach((b, k) => {
+      const a = baseA + (k / members.length) * Math.PI * 2;
+      const type = b.def.type;
+      // tapered hosts (capsules) are narrower where radial gear mounts
+      const hostR =
+        host.def.type === 'capsule' ? host.def.radius * 0.62 : host.def.radius;
+      const offset =
+        type === 'fin'
+          ? hostR + 0.02
+          : type === 'legs'
+            ? hostR + 0.08
+            : type === 'rcs'
+              ? hostR + b.def.radius * 0.6
+              : hostR + b.def.radius + 0.04;
+      const mesh = buildPartMesh(b.def, !!b.deployed);
+      const hostBottom = centerY[hostIndex] - host.def.height / 2;
+      const cy =
+        type === 'srb'
+          ? hostBottom - 0.4 + b.def.height / 2 // boosters hang below
+          : type === 'fin'
+            ? hostBottom + b.def.height * 0.55 // fins ride the host's skirt
+            : type === 'legs'
+              ? hostBottom + b.def.height * 0.5
+              : centerY[hostIndex]; // chutes/RCS sit at the waist
+      mesh.position.set(Math.cos(a) * offset, cy, Math.sin(a) * offset);
+      // directional radials (fins, legs, RCS) face away from the hull
+      if (type === 'fin' || type === 'legs' || type === 'rcs') {
+        mesh.rotation.y = -a;
+      }
+      group.add(mesh);
+      radialMeshes.push({ mesh, groupUid: b.groupUid });
+      const canopy = mesh.getObjectByName('canopy');
+      if (canopy) {
+        // radial canopies tilt away from the stack so pairs don't merge
+        const base = new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)),
+          -0.38,
+        );
+        canopy.quaternion.copy(base);
+        canopies.push({
+          group: canopy,
+          source: b as { inflate?: number },
+          base,
+          phase: hostIndex * 1.7 + k * 2.3,
+        });
+      }
+      if (type === 'srb') {
+        srbMounts.set(b, {
+          x: Math.cos(a) * offset,
+          y: cy - b.def.height / 2,
+          z: Math.sin(a) * offset,
+        });
+      }
+    });
   }
-  return { group, height, boosterMounts, partGroups, canopies };
+  for (const r of radials) {
+    const m = srbMounts.get(r);
+    if (m) boosterMounts.push(m);
+  }
+  return { group, height, boosterMounts, partGroups, radialMeshes, canopies };
 }
 
 /** Additive exhaust cone; scale/flicker it from the flight scene. */

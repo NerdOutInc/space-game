@@ -9,7 +9,7 @@ import { VABScene } from './scenes/vab';
 import { STATE } from './state';
 import { HOME } from './universe/bodies';
 import { showToast } from './util/toast';
-import { CraftPart } from './vessel/parts';
+import { CraftDesign } from './vessel/craft';
 import { Vessel } from './vessel/vessel';
 
 STATE.loadLatest();
@@ -77,8 +77,8 @@ class Game implements GameHost {
     this.switchTo(this.vab);
   }
 
-  launchVessel(craft: CraftPart[]): void {
-    const vessel = new Vessel(craft, HOME);
+  launchVessel(design: CraftDesign): void {
+    const vessel = new Vessel(design, HOME);
     vessel.name = STATE.nextName();
     STATE.add(vessel);
     this.switchTo(new FlightScene(this, vessel));
@@ -89,7 +89,7 @@ class Game implements GameHost {
   }
 
   revertVessel(vessel: Vessel): void {
-    const fresh = new Vessel(vessel.craft, HOME);
+    const fresh = new Vessel(vessel.design, HOME);
     fresh.name = vessel.name;
     STATE.replace(vessel, fresh);
     this.switchTo(new FlightScene(this, fresh));
@@ -133,12 +133,14 @@ class Game implements GameHost {
       const w = window as unknown as {
         __step?: (sec: number) => void;
         __state?: typeof STATE;
+        __parts?: unknown;
       };
       w.__step = (sec) => {
         const n = Math.ceil(sec / 0.05);
         for (let i = 0; i < n; i++) this.scene?.update(0.05);
       };
       w.__state = STATE;
+      import('./vessel/parts').then((m) => (w.__parts = m.PART_BY_ID));
     }
   }
 }

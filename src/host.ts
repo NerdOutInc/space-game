@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CraftPart } from './vessel/parts';
+import { CraftDesign } from './vessel/craft';
 import { Vessel } from './vessel/vessel';
 
 export interface GameScene {
@@ -17,7 +17,7 @@ export interface GameHost {
   toSpaceCenter(): void;
   toVAB(): void;
   /** Build a new vessel from a craft design, add it to the world, and fly it. */
-  launchVessel(craft: CraftPart[]): void;
+  launchVessel(design: CraftDesign): void;
   /** Switch focus to an existing vessel. */
   flyVessel(vessel: Vessel): void;
   /** Reset a vessel to a fresh copy on the pad and fly it. */

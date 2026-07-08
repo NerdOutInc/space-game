@@ -59,10 +59,28 @@
       </div>
       <button id="vab-back" class="btn">← SPACE CENTER</button>
       <div id="stack-panel" class="panel">
-        <h3>Stack <span class="hint">top → bottom</span></h3>
-        <div id="stack-list"></div>
+        <h3>Craft</h3>
         <div id="vab-stats"></div>
-        <div id="vab-stages"></div>
+        <div id="stage-panel">
+          <h3>Stages <span class="hint">drag chips to re-order</span></h3>
+          <div id="stage-list"></div>
+          <div class="stage-actions">
+            <button id="stage-add" class="mini-btn">+ stage</button>
+            <button id="stage-reset" class="mini-btn">↺ auto</button>
+          </div>
+        </div>
+      </div>
+      <div id="hold-hud" class="panel hidden">
+        <b id="hold-name"></b>
+        <div id="hold-mode-row" class="hold-row">
+          mode <button id="hold-mode" class="mini-btn">STACK</button>
+          <span class="hint">R toggles</span>
+        </div>
+        <div id="hold-sym-row" class="hold-row">
+          symmetry <span id="hold-sym-btns"></span>
+          <span class="hint">keys 1–4</span>
+        </div>
+        <div class="hint">click a glowing ring or hull to place · right-click / Esc discards</div>
       </div>
       <div id="missions-panel" class="panel hidden">
         <h3>Mission Control <span class="hint">active flights</span></h3>
@@ -70,8 +88,9 @@
       </div>
       <button id="launch-btn" class="btn launch">▲ &nbsp;LAUNCH</button>
       <div class="vab-help panel">
-        Click a part to add it to the <b>bottom</b> of the stack; click a stacked part to remove
-        it. Put the capsule on top, an engine at the bottom, and a decoupler between stages.
+        Pick a part from the bin, then click a <b>snap ring</b> (stack) or a
+        <b>tank/capsule hull</b> (radial) to attach it. Click any placed part to pick it back up
+        and re-order the stack. Drag the stage chips on the right to choreograph your launch.
       </div>
     </div>
 
@@ -98,6 +117,7 @@
         </div>
         <div class="row">
           <span id="sas-ind" class="ind on">SAS</span>
+          <span id="rcs-ind" class="ind">RCS</span>
           <span id="ap-ind" class="ind">AUTO</span>
           <span id="stage-ind" class="ind">STAGE 1</span>
           <span id="tilt-ind" class="ind">TILT 0°</span>

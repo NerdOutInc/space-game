@@ -338,6 +338,162 @@ body {
   color: var(--text);
 }
 
+/* ---- dense part bin ---- */
+.palette-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+.part-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 7px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  cursor: grab;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  text-align: left;
+  min-height: 40px;
+}
+.part-card:hover {
+  border-color: var(--accent);
+  background: rgba(127, 212, 255, 0.1);
+}
+.part-card .pname {
+  color: var(--accent);
+  line-height: 1.25;
+}
+.part-card .ptag {
+  font-size: 9px;
+  color: #7b8794;
+}
+.part-card.locked {
+  opacity: 0.62;
+  border-style: dashed;
+}
+.part-card .lock {
+  color: var(--warn);
+  font-size: 10px;
+}
+
+/* ---- holding HUD (part on the cursor) ---- */
+#hold-hud.hidden {
+  display: none;
+}
+#hold-hud {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 74px;
+  width: 320px;
+  font-size: 11px;
+  text-align: center;
+  border-color: rgba(125, 255, 168, 0.5);
+}
+#hold-hud b {
+  color: var(--good);
+  display: block;
+  margin-bottom: 5px;
+}
+.hold-row {
+  margin: 4px 0;
+  color: #9fb0bf;
+}
+.hold-row .mini-btn {
+  margin: 0 3px;
+}
+.mini-btn.active {
+  background: rgba(255, 179, 92, 0.45);
+  color: #fff;
+}
+
+/* ---- stage editor ---- */
+#stage-panel {
+  margin-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 8px;
+}
+#stage-panel h3 {
+  margin-bottom: 6px;
+}
+.stage-box {
+  border: 1px solid rgba(127, 212, 255, 0.22);
+  border-radius: 6px;
+  padding: 5px 6px;
+  background: rgba(127, 212, 255, 0.04);
+}
+.stage-box.dragover {
+  border-color: var(--good);
+  background: rgba(125, 255, 168, 0.08);
+}
+.stage-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  color: #7b8794;
+  margin-bottom: 4px;
+}
+.stage-head b {
+  color: var(--accent);
+  font-weight: normal;
+}
+.chip {
+  display: inline-block;
+  font-size: 10px;
+  padding: 3px 7px;
+  margin: 2px 3px 2px 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: grab;
+  user-select: none;
+}
+.chip.dragging {
+  opacity: 0.4;
+}
+.chip-ignite {
+  border-color: rgba(255, 179, 92, 0.5);
+  color: var(--warn);
+}
+.chip-decouple {
+  border-color: rgba(255, 107, 107, 0.5);
+  color: var(--bad);
+}
+.chip-jettison {
+  border-color: rgba(255, 107, 107, 0.35);
+  color: #e2a2a2;
+}
+.chip-chute {
+  border-color: rgba(125, 255, 168, 0.45);
+  color: var(--good);
+}
+.stage-sep {
+  height: 8px;
+  margin: 1px 0;
+  border-radius: 4px;
+}
+.stage-sep.dragover {
+  background: rgba(125, 255, 168, 0.35);
+  height: 14px;
+}
+.stage-empty-chip {
+  font-size: 10px;
+  color: #62707e;
+  padding: 2px 0 3px;
+}
+.stage-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 /* ============ FLIGHT HUD ============ */
 
 #hud-top {

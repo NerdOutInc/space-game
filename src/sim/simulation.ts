@@ -2,13 +2,16 @@ import * as THREE from 'three';
 import { propagateKepler } from '../math/kepler';
 import { GameState } from '../state';
 import { groundHeight, isWater } from '../universe/terrain';
-import { BoosterInstance, PartInstance, Vessel } from '../vessel/vessel';
+import { PartInstance, RadialInstance, Vessel } from '../vessel/vessel';
 import { Autopilot } from './autopilot';
 
 export interface Controls {
   pitch: number; // -1..1
   yaw: number;
   roll: number;
+  /** RCS translation, vessel-local X / Z (needs RCS blocks + V toggle). */
+  rcsX: number;
+  rcsZ: number;
 }
 
 export const WARP_LEVELS = [1, 2, 4, 10, 50, 100, 1000, 10000];
@@ -16,6 +19,8 @@ const MAX_DT = 1 / 50;
 const ANG_ACCEL = 1.2; // rad/s^2 from reaction wheels
 const MAX_ANG_VEL = 2.0;
 const SAFE_LANDING_SPEED = 15; // m/s
+const SAFE_LANDING_SPEED_LEGS = 20; // m/s, on deployed landing legs
+const RCS_ISP = 240; // s, monoprop thrusters
 
 // ---- aero-thermal tuning ----
 const HEAT_K = 2e-6; // skin heating ~ K * rho * v^3  (K/s)
@@ -47,7 +52,7 @@ export class Simulation {
   autopilot = new Autopilot();
   /** Parts dropped by autopilot staging, for the scene to turn into debris. */
   dropped: PartInstance[][] = [];
-  droppedBoosters: BoosterInstance[][] = [];
+  droppedRadials: RadialInstance[][] = [];
   readonly state: GameState;
 
   constructor(vessel: Vessel, state: GameState) {
@@ -258,6 +263,16 @@ export class Simulation {
       msgs.push('Flameout — stage out of propellant');
     }
 
+    // RCS translation (docking hands): thrust along the vessel's local X/Z
+    if (v.rcsOn && (ctrl.rcsX !== 0 || ctrl.rcsZ !== 0)) {
+      const f = v.rcsThrust();
+      if (f > 0) {
+        _t1.set(ctrl.rcsX, 0, ctrl.rcsZ).normalize().applyQuaternion(v.q);
+        _acc.addScaledVector(_t1, f / m);
+        v.consumeMonoprop((f / (RCS_ISP * 9.80665)) * h);
+      }
+    }
+
     // Drag (relative to the co-rotating atmosphere) + aero-thermal effects
     if (rho > 0) {
       _spin.set(0, b.spinRate, 0);
@@ -267,11 +282,12 @@ export class Simulation {
       if (va > 0.1) {
         // Hull drag acts at the center of mass — force only, no torque.
         _acc.addScaledVector(_t3, (-0.5 * rho * va * v.bodyDragArea()) / m);
-        // Canopy drag acts ABOVE the center of mass, so it both brakes the
-        // fall and torques the stack until it hangs under the parachute.
-        // (Gravity itself is torque-free about the CoM — the pendulum
-        // righting comes entirely from this offset drag.)
-        const anchors = v.chuteAnchors();
+        // Offset drag surfaces (deployed canopies, fins) act away from the
+        // center of mass, so they brake AND torque the stack: canopies right
+        // the vessel pendulum-style, low-mounted fins weathervane the nose
+        // into the airstream. (Gravity is torque-free about the CoM — all
+        // passive stability comes from this offset drag.)
+        const anchors = v.dragAnchors();
         if (anchors.length > 0) {
           const comY = v.comY();
           const inertia = v.momentOfInertia();
@@ -289,8 +305,10 @@ export class Simulation {
               );
             }
           }
-          // the swinging canopy is itself heavily air-damped
-          v.angVel.multiplyScalar(Math.exp(-1.1 * h));
+          // aero surfaces damp the swing they cause (canopies strongly,
+          // fins enough to keep the weathervane from ringing forever)
+          const damp = v.deployedChutes() > 0 ? 1.1 : 0.35;
+          v.angVel.multiplyScalar(Math.exp(-damp * h));
         }
         this.aeroThermal(h, rho, va, _t3, alt, msgs);
       }
@@ -489,7 +507,8 @@ export class Simulation {
     _t2.crossVectors(_spin, v.pos);
     const impact = _t3.copy(v.vel).sub(_t2).length();
     v.pos.setLength(standR + 0.6);
-    if (impact > SAFE_LANDING_SPEED) {
+    const safe = v.hasDeployedLegs() ? SAFE_LANDING_SPEED_LEGS : SAFE_LANDING_SPEED;
+    if (impact > safe) {
       v.destroyed = true;
       msgs.push(`CRASH! Impact at ${impact.toFixed(0)} m/s`);
     } else {
