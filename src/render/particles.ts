@@ -203,7 +203,12 @@ export class EnginePlume {
     if (level <= 0.01 || dt <= 0) return;
     _pd.set(0, -1, 0).applyQuaternion(q); // exhaust direction
 
-    this.exhaust.acc += 650 * level * dt;
+    // Visible plumes need air to push against: both pools fade out with
+    // density and are gone in vacuum (the solid core flame covers space).
+    const air = Math.min(1, rho / 0.02);
+    if (air <= 0) return;
+
+    this.exhaust.acc += 650 * level * air * dt;
     while (this.exhaust.acc >= 1) {
       this.exhaust.acc -= 1;
       const s = 45 + Math.random() * 45;

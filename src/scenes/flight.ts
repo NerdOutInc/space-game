@@ -185,8 +185,9 @@ export class FlightScene implements GameScene {
     this.scene.add(this.rocketHolder);
     this.rebuildRocket();
 
-    // The whole space center campus sits at the launch site (floodlit!)
-    this.campus = buildCampus();
+    // The whole space center campus sits at the launch site (floodlit!),
+    // with a ground apron so nothing hovers over the coarse planet mesh
+    this.campus = buildCampus(true);
     this.scene.add(this.campus);
 
     // ---------- map scene ----------
@@ -196,8 +197,10 @@ export class FlightScene implements GameScene {
 
     for (const body of BODIES) {
       const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(Math.max(body.radius * MAP_SCALE, 0.02), 32, 16),
-        new THREE.MeshBasicMaterial({ color: body.color }),
+        new THREE.SphereGeometry(Math.max(body.radius * MAP_SCALE, 0.02), 48, 24),
+        body.isStar
+          ? new THREE.MeshBasicMaterial({ color: body.color })
+          : new THREE.MeshBasicMaterial({ map: makeBodyTexture(body) }),
       );
       if (body.atmosphere) {
         // Soft haze fading from the surface outward (same shader as flight view)
@@ -402,17 +405,14 @@ export class FlightScene implements GameScene {
     this.plume.dispose();
     this.navball.dispose();
     // This scene is per-flight: free GPU resources when leaving it.
+    // (Textures are NOT disposed — planet/dot textures are cached and
+    // shared across scenes.)
     for (const scene of [this.scene, this.mapScene]) {
       scene.traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (mesh.geometry) mesh.geometry.dispose();
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        for (const m of mats) {
-          if (!m) continue;
-          const std = m as THREE.MeshStandardMaterial;
-          std.map?.dispose();
-          m.dispose();
-        }
+        for (const m of mats) m?.dispose();
       });
     }
   }
@@ -711,9 +711,11 @@ export class FlightScene implements GameScene {
     this.scene.add(group);
     const up = _v1.set(0, 1, 0).applyQuaternion(this.vessel.q);
     const droppedH = parts.reduce((s, p) => s + p.def.height, 0);
+    // use the CURRENT (post-separation) stack height so the debris appears
+    // exactly where those parts were a frame ago
     const pos = this.vessel.pos
       .clone()
-      .addScaledVector(up, -(this.rocketHeight / 2 + droppedH / 2 + 0.5));
+      .addScaledVector(up, -(this.vessel.stackHeight() / 2 + droppedH / 2 + 0.1));
     const vel = this.vessel.vel.clone().addScaledVector(up, -2.5);
     group.quaternion.copy(this.vessel.q);
     this.debris.push({ group, body: this.vessel.body, pos, vel, age: 0 });
@@ -984,11 +986,15 @@ export class FlightScene implements GameScene {
     }
     const firing = v.destroyed ? [] : v.firingEngines(pr);
     const coreThrust = firing.some((f) => !('hostIndex' in f.part));
-    // the cone is just a short bright core now — the particles ARE the plume
+    // In atmosphere the particles ARE the plume, so the cone shrinks to a
+    // bright core; in vacuum (no particles) the cone grows back to a full
+    // classic exhaust spike.
+    const airVis = Math.min(1, (pr > 0 ? v.body.atmosphere!.rho0 * pr : 0) / 0.02);
+    const coneLen = 1 - 0.55 * airVis;
     this.flame.visible = coreThrust;
     if (coreThrust) {
       const s = 0.75 + 0.5 * Math.random() * 0.3 + v.throttle * 0.6;
-      this.flame.scale.set(0.8, s * 0.45, 0.8);
+      this.flame.scale.set(0.8, s * coneLen, 0.8);
     }
     // booster flames track their instance (visual order matches vessel.boosters)
     for (let i = 0; i < this.boosterFlames.length; i++) {
@@ -996,7 +1002,7 @@ export class FlightScene implements GameScene {
       const on = !!b && b.ignited && b.fuel > 0 && !v.destroyed;
       this.boosterFlames[i].visible = on;
       if (on) {
-        this.boosterFlames[i].scale.set(0.7, 0.35 + Math.random() * 0.12, 0.7);
+        this.boosterFlames[i].scale.set(0.7, (0.35 + Math.random() * 0.12) * (coneLen + 0.4), 0.7);
       }
     }
 
@@ -1222,6 +1228,9 @@ export class FlightScene implements GameScene {
     for (const [body, vis] of this.mapBodies) {
       body.worldPosition(t, _v2).sub(focus).multiplyScalar(MAP_SCALE);
       vis.mesh.position.copy(_v2);
+      // textured globes spin with the real planet, so what you see is
+      // where you'd actually land
+      vis.mesh.rotation.y = body.rotationAngle(t);
       vis.marker.position.copy(_v2);
       const d = vis.marker.position.distanceTo(this.mapCamera.position);
       const s = d * 0.012;

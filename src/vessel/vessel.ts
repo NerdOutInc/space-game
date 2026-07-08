@@ -44,6 +44,8 @@ function newInstance(def: PartDef): PartInstance {
   return { def, fuel: def.fuel ?? 0, ignited: false, deployed: false, armed: false };
 }
 
+const _upTmp = new THREE.Vector3();
+
 export class Vessel {
   parts: PartInstance[]; // stack, ordered top → bottom
   boosters: BoosterInstance[] = [];
@@ -122,6 +124,7 @@ export class Vessel {
       this.destroyed = true;
       return { name: part.def.name, fatal: true };
     }
+    const h0 = this.stackHeight();
     if (top) {
       this.parts.shift();
       this.boosters = this.boosters
@@ -136,6 +139,9 @@ export class Vessel {
       this.boosters = this.boosters.filter((b) => b.hostIndex < n);
       this.radialChutes = this.radialChutes.filter((c) => c.hostIndex < n);
     }
+    // keep the surviving parts fixed in world space
+    _upTmp.set(0, 1, 0).applyQuaternion(this.q);
+    this.pos.addScaledVector(_upTmp, ((h0 - this.stackHeight()) / 2) * (top ? -1 : 1));
     return { name: part.def.name, fatal: false };
   }
 
@@ -421,11 +427,16 @@ export class Vessel {
 
     const idx = this.parts.map((p) => p.def.type).lastIndexOf('decoupler');
     if (idx !== -1) {
+      const h0 = this.stackHeight();
       const dropped = this.parts.slice(idx); // decoupler goes with the lower half
       const droppedBoosters = this.boosters.filter((b) => b.hostIndex >= idx);
       this.boosters = this.boosters.filter((b) => b.hostIndex < idx);
       this.radialChutes = this.radialChutes.filter((c) => c.hostIndex < idx);
       this.parts = this.parts.slice(0, idx);
+      // pos is the stack's geometric center: shift it up so the REMAINING
+      // parts keep their world positions (no visual jump on separation)
+      _upTmp.set(0, 1, 0).applyQuaternion(this.q);
+      this.pos.addScaledVector(_upTmp, (h0 - this.stackHeight()) / 2);
       // Auto-ignite the new bottom stage's engines and boosters.
       for (const p of this.bottomGroup()) {
         if (p.def.type === 'engine' || p.def.type === 'srb') p.ignited = true;

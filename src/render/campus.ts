@@ -13,9 +13,29 @@ function building(w: number, h: number, d: number, color: number): THREE.Mesh {
  * The Zenith Space Center campus with the LAUNCH PAD AT THE ORIGIN, so the
  * flight scene can drop it exactly at the pad site on Gaia. Includes
  * emissive floodlights so the facility reads at night.
+ *
+ * `withApron` adds a local ground disc at the analytic plateau height —
+ * the planet mesh's vertices are ~20 km apart, so its interpolated surface
+ * can dip below the true ground and leave the buildings hovering.
  */
-export function buildCampus(): THREE.Group {
+export function buildCampus(withApron = false): THREE.Group {
   const g = new THREE.Group();
+
+  if (withApron) {
+    const apron = new THREE.Mesh(
+      new THREE.CircleGeometry(2600, 48),
+      new THREE.MeshStandardMaterial({ color: 0x35603b, roughness: 1 }),
+    );
+    apron.rotation.x = -Math.PI / 2;
+    apron.position.y = 1.8; // campus local 1.8 = analytic ground level
+    g.add(apron);
+    const skirt = new THREE.Mesh(
+      new THREE.CylinderGeometry(2600, 2680, 60, 48, 1, true),
+      new THREE.MeshStandardMaterial({ color: 0x2c5232, roughness: 1, side: THREE.DoubleSide }),
+    );
+    skirt.position.y = 1.8 - 30;
+    g.add(skirt);
+  }
 
   // Launch pad
   const pad = new THREE.Mesh(

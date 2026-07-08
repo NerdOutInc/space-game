@@ -27,12 +27,18 @@ const _c1 = new THREE.Color();
 const _c2 = new THREE.Color();
 const _out = new THREE.Color();
 
+const bodyTexCache = new Map<string, THREE.CanvasTexture>();
+
 /**
  * Planet texture painted from the SAME terrain heightfield that displaces
  * the mesh and drives collision: oceans below datum, shaded land, snow on
  * the peaks. UV→direction matches Three's SphereGeometry mapping.
+ * Cached per body (expensive to paint, shared by flight/map/menu scenes —
+ * so callers must NOT dispose it).
  */
 export function makeBodyTexture(body: Body): THREE.CanvasTexture {
+  const cached = bodyTexCache.get(body.name);
+  if (cached) return cached;
   const w = body.terrain ? 640 : 512;
   const h = w / 2;
   const canvas = document.createElement('canvas');
@@ -133,6 +139,7 @@ export function makeBodyTexture(body: Body): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = THREE.RepeatWrapping;
+  bodyTexCache.set(body.name, tex);
   return tex;
 }
 
@@ -161,8 +168,11 @@ export function makeStarfield(radius: number, count = 2600): THREE.Points {
   return new THREE.Points(geo, mat);
 }
 
-/** Small round dot texture for map markers. */
+let dotTex: THREE.CanvasTexture | null = null;
+
+/** Small round dot texture for map markers (shared singleton — don't dispose). */
 export function makeDotTexture(): THREE.CanvasTexture {
+  if (dotTex) return dotTex;
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const ctx = c.getContext('2d')!;
@@ -172,6 +182,6 @@ export function makeDotTexture(): THREE.CanvasTexture {
   grad.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 64, 64);
-  const tex = new THREE.CanvasTexture(c);
-  return tex;
+  dotTex = new THREE.CanvasTexture(c);
+  return dotTex;
 }

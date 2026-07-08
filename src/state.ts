@@ -1,8 +1,22 @@
 import * as THREE from 'three';
 import { propagateKepler } from './math/kepler';
 import { BODIES, HOME } from './universe/bodies';
+import { PAD_DIR } from './universe/terrain';
 import { BOOSTER_DEF_ID, PartDef, PART_BY_ID } from './vessel/parts';
 import { Vessel } from './vessel/vessel';
+
+/**
+ * Universal time at which the sun sits ~30° above the launch site's eastern
+ * horizon (a bright morning). Sun elevation at the pad is -cos(φ + θ) where
+ * φ is the pad's longitude and θ the planet's rotation, so we solve for
+ * elevation = 0.5 regardless of where the terrain search put the pad.
+ */
+function morningTime(): number {
+  const phi = Math.atan2(-PAD_DIR.z, PAD_DIR.x);
+  const TWO_PI = Math.PI * 2;
+  const theta = (((2 * Math.PI) / 3 - phi) % TWO_PI + TWO_PI) % TWO_PI;
+  return (theta / TWO_PI) * HOME.rotationPeriod;
+}
 
 const _p = new THREE.Vector3();
 const _v = new THREE.Vector3();
@@ -153,7 +167,7 @@ export class GameState {
 
   /** Start a fresh game in the given mode, in a brand-new save slot. */
   reset(mode: GameMode): void {
-    this.t = 0;
+    this.t = morningTime(); // new games open on a sunlit morning at the pad
     this.vessels = [];
     this.mode = mode;
     this.science = 0;
